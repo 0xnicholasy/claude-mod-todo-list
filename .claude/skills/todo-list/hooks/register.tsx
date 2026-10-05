@@ -19,14 +19,12 @@ import {
   touchesPlan,
 } from './plan-tool'
 import { clean } from './sanitize'
-import { buildTree, DEFAULT_ACCENT, DEFAULT_WIDTH, preferredRows, statusLine } from './tree'
+import { buildTree, DEFAULT_ACCENT, DEFAULT_WIDTH, paneRows, statusLine } from './tree'
 
 // D4: the registered name is `mcp__<plugin>__<name>`, confirmed by the T01 spike (Q1).
 const PLAN_TOOL_FULL_NAME = `mcp__todo-list__${PLAN_TOOL_SHORT_NAME}`
 const PANE = 'todo'
 const PANE_ROWS = 20
-const PANE_MIN_ROWS = 6
-const PANE_MAX_ROWS = 20
 const PANE_COLUMNS = 56
 const DOCK_TIP = ' Tip: the fullscreen layout docks this pane beside the transcript.'
 const DOCK_MIN_COLUMNS = 110
@@ -97,9 +95,14 @@ function debugLog($: EngineInterface, text: string): void {
 // Inline the pane is as tall as the tree wants (a short plan wastes no rows); docked it is
 // PANE_COLUMNS wide. Both are requests: the host decides the placement and may keep a size
 // the person dragged.
-async function openPane($: EngineInterface): Promise<void> {
+//
+// `rows` only counts when the pane opens: one already open keeps the size it opened at (the
+// session-start open sees an empty plan, so 6 rows). `resize` closes it first so the person's
+// `/todo` re-opens at the height the plan wants now.
+async function openPane($: EngineInterface, resize = false): Promise<void> {
   const [p, a] = await Promise.all([read($, plan), read($, activity)])
-  const rows = Math.min(PANE_MAX_ROWS, Math.max(PANE_MIN_ROWS, preferredRows(p, a)))
+  const rows = paneRows(p, a)
+  if (resize && (await $.ui.panes()).some(pane => pane.id === PANE)) await $.ui.close({ id: PANE })
   await $.ui.open({ id: PANE, title: 'Plan', rows, columns: PANE_COLUMNS })
 }
 
@@ -123,7 +126,7 @@ async function runTodoCommand(
     return { text: `Accent color set to ${value}.` }
   }
   if (word === '') {
-    await openPane($)
+    await openPane($, true)
     const tip = !presentation.isFullscreen && presentation.columns >= DOCK_MIN_COLUMNS ? DOCK_TIP : ''
 
     return { text: `Plan pane opened.${tip}` }

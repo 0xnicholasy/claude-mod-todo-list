@@ -23,6 +23,8 @@ const STATUS_TITLE_MAX = 30
 // Below this width the pane drops the percentage, right-aligned counts and long notes.
 export const NARROW_WIDTH = 50
 const NARROW_NOTE_MAX = 20
+const NOTE_FLOOR = 12
+export const COMPACT_BELOW = 10
 
 // One run of text with one style. A row is a list of these so ids, connectors and titles
 // can be styled apart. There is deliberately no inverse or background field.
@@ -107,15 +109,17 @@ const glyphStyle = (status: PlanStatus, accent: string): Partial<Seg> => {
   }
 }
 
-const noteOf = (node: PlanNode): string => {
-  if (node.note !== undefined) {
-    return node.status === 'blocked' || node.status === 'skipped' ? ` (${node.status}: ${node.note})` : ` (${node.note})`
-  }
+// The note text without a leading space: a leaf's own note, with its status when blocked or
+// skipped. A parent (hasKids) and a blocked leaf with no note carry none: the glyph says it.
+const noteOf = (node: PlanNode, hasKids: boolean): string => {
+  if (hasKids) return ''
+  const tagged = node.status === 'blocked' || node.status === 'skipped'
+  if (node.note !== undefined) return tagged ? `(${node.status}: ${node.note})` : `(${node.note})`
 
-  return node.status === 'blocked' || node.status === 'skipped' ? ` (${node.status})` : ''
+  return node.status === 'skipped' ? '(skipped)' : ''
 }
 
-type Row = { line: TreeLine; keep: boolean }
+type Row = { line: TreeLine; keep: boolean; node: PlanNode; top: boolean }
 
 type Ctx = { plan: Plan; currentId: string | null; runningIds: readonly string[]; accent: string; width: number }
 
@@ -132,14 +136,18 @@ const rowFor = (ctx: Ctx, node: PlanNode, lead: string, hasKids: boolean, collap
   const marker = isCurrent ? ` ${GLYPHS.marker}` : ''
   const countWidth = count === null ? 0 : count.length + 1
   const rest = lead.length + 2 + node.id.length + 1 + tag.length + marker.length + countWidth
-  let note = collapse ? '' : noteOf(node)
-  if (narrow && note !== '') {
-    // Keep one cell for the title and one for the space before the note.
-    const room = Math.min(NARROW_NOTE_MAX, width - rest - 2)
-    note = room >= 2 ? ` ${shorten(note.trim(), room)}` : ''
+  const avail = width - rest
+  const full = collapse ? '' : noteOf(node, hasKids)
+  let note = ''
+  let title = node.title
+  if (full !== '') {
+    const cap = narrow ? NARROW_NOTE_MAX : Number.POSITIVE_INFINITY
+    const fitsAfterTitle = avail - node.title.length - 1
+    const floor = Math.min(NOTE_FLOOR, cap, full.length)
+    const room = Math.min(clamp(fitsAfterTitle, floor, cap), avail - 2)
+    if (room >= 2) note = shorten(full, room)
   }
-  const fixed = rest + note.length
-  const title = shorten(node.title, Math.max(1, width - fixed))
+  title = shorten(title, Math.max(1, avail - (note === '' ? 0 : note.length + 1)))
   let titleSeg: Seg
   let glyphSeg: Seg
   if (collapse) {
@@ -157,7 +165,7 @@ const rowFor = (ctx: Ctx, node: PlanNode, lead: string, hasKids: boolean, collap
   const segs: Seg[] = [dimSeg(lead), glyphSeg, seg(' '), dimSeg(node.id), seg(' '), titleSeg]
   if (narrow && count !== null) segs.push(dimSeg(` ${count}`))
   if (tag !== '') segs.push(dimSeg(tag))
-  if (note !== '') segs.push(dimSeg(note))
+  if (note !== '') segs.push(dimSeg(` ${note}`))
   if (marker !== '') segs.push(dimSeg(marker))
   if (!narrow && count !== null) {
     const used = segs.reduce((n, s) => n + s.text.length, 0)
@@ -178,7 +186,7 @@ const rowsFor = (ctx: Ctx, parentId: string | null, prefix: string): Row[] => {
     const isAncestor = runningIds.some(id => id.startsWith(`${node.id}.`))
     const collapse = hasKids && node.status === 'completed' && !isAncestor
     const lead = `${prefix}${isLast ? GLYPHS.last : GLYPHS.branch} `
-    out.push({ line: rowFor(ctx, node, lead, hasKids, collapse), keep: isRunning || isAncestor })
+    out.push({ line: rowFor(ctx, node, lead, hasKids, collapse), keep: isRunning || isAncestor, node, top: parentId === null })
     if (hasKids && !collapse) {
       out.push(...rowsFor(ctx, node.id, `${prefix}${isLast ? '   ' : `${GLYPHS.pipe}  `}`))
     }
@@ -212,6 +220,95 @@ const activityLine = (activity: ActivityState, accent: string, width: number): T
   }
 }
 
+const doneTop = (r: Row): boolean => r.node.status === 'completed' && !r.keep
+
+// "1-2, 4-7" for the top-level ids, in tree order, runs of adjacent rows joined with an en dash.
+const rangesOf = (ids: readonly string[][]): string =>
+  ids.map(run => (run.length === 1 ? run[0] : `${run[0]}–${run[run.length - 1]}`)).join(', ')
+
+const overflowLabel = (hidden: readonly Row[]): string => {
+  const count = (pick: (s: PlanStatus) => boolean): number => hidden.filter(r => pick(r.node.status)).length
+  const parts: [number, string][] = [
+    [count(s => s === 'completed' || s === 'skipped'), 'done'],
+    [count(s => s === 'in_progress'), 'running'],
+    [count(s => s === 'blocked'), 'blocked'],
+    [count(s => s === 'pending'), 'pending'],
+  ]
+  const text = parts.filter(([n]) => n > 0).map(([n, name]) => `${n} ${name}`).join(', ')
+
+  return `+${hidden.length} more${text === '' ? '' : ` · ${text}`}`
+}
+
+// Picks which rows fit in `budget` lines, always in tree order. Kept first: the paths to the
+// running leaves; then every top-level row; then the current leaf's siblings; then the rest.
+// When the first two tiers alone do not fit, completed top-level rows fold into one line.
+const fitRows = (rows: Row[], budget: number, current: PlanNode | null, width: number): TreeLine[] => {
+  const keepCount = rows.filter(r => r.keep).length
+  const topCount = rows.filter(r => !r.keep && r.top).length
+  const fold = keepCount + topCount > budget
+  const folded = fold ? rows.filter(r => r.top && doneTop(r)) : []
+  const foldLine = ((): TreeLine | null => {
+    if (folded.length === 0) return null
+    const runs: string[][] = []
+    let prev = -2
+    rows.forEach((r, i) => {
+      if (!folded.includes(r)) return
+      if (i === prev + 1 && runs.length > 0) runs[runs.length - 1]?.push(r.node.id)
+      else runs.push([r.node.id])
+      prev = i
+    })
+
+    return lineOf([dimSeg(shorten(`${GLYPHS.completed} ${rangesOf(runs)} done`, width))])
+  })()
+  const tierOf = (r: Row): number => {
+    if (r.keep) return 0
+    if (r.top) return 1
+    if (current !== null && r.node.parentId === current.parentId) return 2
+
+    return 3
+  }
+  const picked = new Set<Row>(rows.filter(r => r.keep))
+  let spare = budget - keepCount - (foldLine === null ? 0 : 1)
+  for (const tier of [1, 2, 3]) {
+    for (const row of rows) {
+      if (spare <= 0) break
+      if (tierOf(row) === tier && !folded.includes(row)) {
+        picked.add(row)
+        spare -= 1
+      }
+    }
+  }
+  const out: TreeLine[] = []
+  let foldPlaced = false
+  const hidden: Row[] = []
+  for (const row of rows) {
+    if (folded.includes(row)) {
+      if (!foldPlaced && foldLine !== null) out.push(foldLine)
+      foldPlaced = true
+    } else if (picked.has(row)) out.push(row.line)
+    else hidden.push(row)
+  }
+  if (hidden.length > 0) out.push(lineOf([dimSeg(shorten(overflowLabel(hidden), width))]))
+
+  return out
+}
+
+const compactHead = (plan: Plan, done: number, total: number, accent: string, width: number): TreeLine => {
+  const cells = clamp(Math.round(width / 6), 4, 10)
+  const filled = total === 0 ? 0 : Math.round((done / total) * cells)
+  const count = `${done}/${total}`
+  const title = shorten(plan.title, Math.max(1, width - cells - count.length - 4))
+
+  return lineOf([
+    seg(title, { bold: true }),
+    seg('  '),
+    seg(GLYPHS.filled.repeat(filled), { color: accent }),
+    dimSeg(GLYPHS.track.repeat(cells - filled)),
+    seg('  '),
+    dimSeg(count),
+  ])
+}
+
 export const buildTree = (plan: Plan, activity: ActivityState, opts: TreeOptions): TreeLine[] => {
   const width = opts.width ?? DEFAULT_WIDTH
   const accent = opts.accent ?? DEFAULT_ACCENT
@@ -222,36 +319,30 @@ export const buildTree = (plan: Plan, activity: ActivityState, opts: TreeOptions
     return act === null ? [empty] : [empty, act]
   }
   const { done, total } = progress(plan)
-  const head: TreeLine[] = [
-    lineOf([seg(shorten(plan.title, width), { bold: true })]),
-    lineOf(bar(done, total, accent, width)),
-  ]
+  const tight = opts.maxLines < COMPACT_BELOW
+  const head: TreeLine[] = tight
+    ? [compactHead(plan, done, total, accent, width)]
+    : [lineOf([seg(shorten(plan.title, width), { bold: true })]), lineOf(bar(done, total, accent, width))]
   if (act !== null) head.push(act)
-  head.push(blank())
+  if (!tight) head.push(blank())
   const current = highlighted(plan)
-  // The current step's path stays visible even when it is a blocked or pending leaf.
   const runningIds = [...new Set([...activeLeaves(plan).map(n => n.id), ...(current === null ? [] : [current.id])])]
   const rows = rowsFor({ plan, currentId: current?.id ?? null, runningIds, accent, width }, null, '')
   const room = opts.maxLines - head.length
   if (rows.length <= room) return [...head, ...rows.map(r => r.line)]
-  const mustKeep = rows.filter(r => r.keep).length
-  const budget = Math.max(room - 1, mustKeep)
-  let spare = budget - mustKeep
-  const shown: TreeLine[] = []
-  for (const row of rows) {
-    if (row.keep) shown.push(row.line)
-    else if (spare > 0) {
-      shown.push(row.line)
-      spare -= 1
-    }
-  }
 
-  return [...head, ...shown, lineOf([dimSeg(`+${rows.length - shown.length} more`)])]
+  return [...head, ...fitRows(rows, Math.max(room - 1, 1), current, width)]
 }
 
-// The tree's line count with no limit: what the pane wants to be tall inline.
 export const preferredRows = (plan: Plan, activity: ActivityState): number =>
   buildTree(plan, activity, { maxLines: Number.POSITIVE_INFINITY }).length
+
+export const PANE_MIN_ROWS = 6
+export const PANE_MAX_ROWS = 20
+
+// The body height to ask the host for: what the tree wants, clamped.
+export const paneRows = (plan: Plan, activity: ActivityState): number =>
+  Math.min(PANE_MAX_ROWS, Math.max(PANE_MIN_ROWS, preferredRows(plan, activity)))
 
 export const statusLine = (plan: Plan, activity: ActivityState): string | undefined => {
   const label = activityLabel(activity)
