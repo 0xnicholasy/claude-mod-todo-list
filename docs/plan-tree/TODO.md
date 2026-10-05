@@ -2,7 +2,7 @@
 
 ultraplan: plan-tree | branch: feat/plan-tree | base: main | tag: pre-plan-tree-main | created: 2026-10-05
 Status: ACTIVE
-Progress: 3/14 done
+Progress: 5/14 done
 
 ## Goal
 With the plugin loaded, every prompt that leads to tool use gets a plan tree that Claude writes through the plugin's own `mcp__todo-list__plan` tool. That tree is the only record of progress. A pane and status line draw it as a box-drawing tree with per-node status (Completed, In progress, Pending, Blocked, Skipped). They also show what Claude is doing now: working, running a tool, waiting for permission, waiting for your answer, compacting, interrupted, error, and how many subagents are running. State-changing tools are blocked until a plan exists. Enforcement fails open and the user can switch it off.
@@ -66,7 +66,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - verify: `npm run check`
 
 ### T04 Build the tree renderer and status-line text
-- status: todo
+- status: done (#6, 2026-10-05)
 - needs: T02
 - size: M
 - scope: Add `hooks/tree.ts`. `buildTree(plan, activity, { maxLines })` returns `Line[]` (`text`, `color?`, `bold`, `dim`, `inverse`): header (title, `done/total`, 14-cell `█`/`░` bar, percentage); activity line; nodes with `├─ └─ │` connectors and per-status glyph and colour (completed `✓` green dim, in_progress `◉` cyan bold, pending `○` default, blocked `■` yellow with note, skipped `–` dim strikethrough); current node bold + inverse with ancestors always expanded; completed branches collapsed to `✓ <title> (n/n)`; past maxLines the path to the current node is kept and the rest becomes `+N more`. Empty state "No plan yet." `statusLine(plan, activity)` returns e.g. `Plan 3/7 · Escaping quotes · Waiting for permission: Bash`, or undefined with no plan and idle.
@@ -75,7 +75,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - verify: `npm run check`
 
 ### T05 Build the activity reducer (Claude state from events)
-- status: todo
+- status: done (#5, 2026-10-05)
 - needs: T02
 - size: S
 - scope: Add `hooks/activity.ts`, pure `reduceActivity(prev, event, now)`. Events: turnStart, turnComplete(reason), toolStart(tool), toolEnd, permissionAsk(tool), questionOpen, questionClose, compactStart, compactEnd, subagentStart(id), subagentStop(id), stopFailure(detail). Phases: idle, working, tool, permission, question, compacting, interrupted, error. Precedence question > permission > compacting > tool > working. Subagent ids form a set (duplicate start counts once; unknown stop is a no-op). `activityLabel(activity)` returns the label table in plan.md. turnComplete events carrying an `agentId` are ignored, so only main-loop turn ends move to idle, interrupted or error. A user rejecting a dialog ends as reason `answer` (idle), not aborted. Add a `sessionClear` event that resets activity. Subagent ids stay a set, because Start/Stop events from unrelated background agents can arrive.
@@ -174,4 +174,6 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 2026-10-05 T01 #2 spike answered Q1-Q10 (10 observed, 0 unobserved; sub-points unobserved listed in spike.md)
 2026-10-05 amend spike corrections applied to D7, D10, T03, T05-T10, T13 (owner approved)
 2026-10-05 T02 #4 plan model, reducers and new atoms
+2026-10-05 T05 #5 activity reducer: Claude state from events
+2026-10-05 T04 #6 tree renderer and status line
 2026-10-05 T03 #7 plan tool schema, parser and model-facing text
