@@ -120,7 +120,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - verify: `npm run check`; live check of the activity line in T13
 
 ### T10 Enforce the gate with escape hatches; replace the never-block rule
-- status: done (#PR, 2026-10-05)
+- status: done (#12, 2026-10-05)
 - needs: T09
 - size: M
 - scope: Add a catch-all `tool.call` gate hook running `decideGate`. A deny returns `{ deny }` and increments `task.denies`; on the first deny of a turn show the user toast "Blocked <tool>: no plan yet. /todo off turns this off."; pause shows a toast too. Add `userConfig.enforce` (boolean, default true) to plugin.json and read it from `register(on, options)` (PluginOptions 7316-7328). Add `/todo off|on` setting `enforceSession`. In the project CLAUDE.md replace "The nudge never blocks: no hook returns deny" with "The gate denies only blocked main-loop tools while the task has no plan; it fails open (guard failure, tool unregistered or not offered, enforcement off, 3 denies in a turn)".
@@ -186,4 +186,4 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 2026-10-05 T07 #9 plan tool, tree pane and status line live (3-level schema confirmed)
 2026-10-05 T08 #10 TaskCreate/TaskUpdate (and synthetic TodoWrite) mirrored into the tree
 2026-10-05 T09 #11 session activity events wired to the activity line
-2026-10-05 T10 #PR gate blocks edits until a plan exists; fails open; /todo off|on; userConfig.enforce
+2026-10-05 T10 #12 gate blocks edits until a plan exists; fails open; /todo off|on; userConfig.enforce
