@@ -41,7 +41,7 @@ const compareIds = (a: string, b: string): number => {
   return x.length - y.length
 }
 
-const sortNodes = (nodes: PlanNode[]): PlanNode[] => [...nodes].sort((a, b) => compareIds(a.id, b.id))
+export const sortNodes = (nodes: PlanNode[]): PlanNode[] => [...nodes].sort((a, b) => compareIds(a.id, b.id))
 
 const childrenOf = (nodes: readonly PlanNode[], id: string): PlanNode[] =>
   nodes.filter(n => n.parentId === id)
@@ -54,7 +54,7 @@ const validIds = (plan: Plan): string =>
   plan.nodes.length === 0 ? 'the plan has no nodes' : `valid ids: ${plan.nodes.map(n => n.id).join(', ')}`
 
 // Cleans a title or form and checks the length limit. Returns the text or an error.
-const checkText = (label: string, raw: string, max: number, allowEmpty: boolean): { text: string } | { error: string } => {
+export const checkText = (label: string, raw: string, max: number, allowEmpty: boolean): { text: string } | { error: string } => {
   if (typeof raw !== 'string') return { error: `${label} must be text` }
   const text = clean(raw)
   if (text === '' && !allowEmpty) return { error: `${label} is empty` }
@@ -64,7 +64,7 @@ const checkText = (label: string, raw: string, max: number, allowEmpty: boolean)
 }
 
 // Counters of issued child numbers, keyed by parent id ('' is the top level).
-const toCounters = (plan: Plan): Map<string, number> => {
+export const toCounters = (plan: Plan): Map<string, number> => {
   const counters = new Map<string, number>()
   for (const c of plan.issued) counters.set(c.parent, c.last)
   // Nodes that exist always count, in case `issued` was never written for them.
@@ -77,7 +77,7 @@ const toCounters = (plan: Plan): Map<string, number> => {
   return counters
 }
 
-const fromCounters = (counters: Map<string, number>): Plan['issued'] =>
+export const fromCounters = (counters: Map<string, number>): Plan['issued'] =>
   [...counters.entries()].map(([parent, last]) => ({ parent, last }))
 
 // Flattens nested input under `parentId`, issuing ids from `counters`. `depth` is the depth of
