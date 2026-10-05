@@ -2,7 +2,7 @@
 
 ultraplan: plan-tree | branch: feat/plan-tree | base: main | tag: pre-plan-tree-main | created: 2026-10-05
 Status: ACTIVE
-Progress: 0/14 done
+Progress: 1/14 done
 
 ## Goal
 With the plugin loaded, every prompt that leads to tool use gets a plan tree that Claude writes through the plugin's own `mcp__todo-list__plan` tool. That tree is the only record of progress. A pane and status line draw it as a box-drawing tree with per-node status (Completed, In progress, Pending, Blocked, Skipped). They also show what Claude is doing now: working, running a tool, waiting for permission, waiting for your answer, compacting, interrupted, error, and how many subagents are running. State-changing tools are blocked until a plan exists. Enforcement fails open and the user can switch it off.
@@ -24,11 +24,11 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - D1 Land once at the end: one landing PR from feat/plan-tree into main. (owner, 2026-10-05)
 - D2 Enforcement = BLOCK. While no plan exists for the current task, state-changing main-loop tool calls are denied with a message telling Claude to create the plan first. The project CLAUDE.md rule "The nudge never blocks: no hook returns deny" is removed (in T10). (owner, 2026-10-05)
 - D3 Threshold: any prompt that leads to tool use gets a plan; pure Q&A stays plan-free. Read-only tools never trigger the gate, so a Q&A turn that only reads is never blocked. (owner, 2026-10-05)
-- D4 Names stay: plugin `todo-list`, tool `mcp__todo-list__plan` (short name `plan`), command `/todo`. Avoids moving the settings key and a possible clash with a built-in `/plan` (the API refuses built-in names, vendor d.ts ~2982). | assumed, confirm by T01
+- D4 Names stay: plugin `todo-list`, tool `mcp__todo-list__plan` (short name `plan`), command `/todo`. Avoids moving the settings key and a possible clash with a built-in `/plan` (the API refuses built-in names, vendor d.ts ~2982). | confirmed by T01
 - D5 The plan is a flat node list with `parentId` and stable path ids ("1", "2.1", "2.1.3"). Ids are never reused after a remove. Max depth 3, max 60 nodes. Inline atom types cannot be recursive. | assumed, confirm by T02
 - D6 Blocked set (main loop only, `agentId` absent): Edit, Write, NotebookEdit, Bash, Agent, Workflow, CronCreate, CronDelete, EnterWorktree, ExitWorktree, RemoteTrigger. Everything else is allowed, including third-party MCP tools, because the API gives no read-only flag before a call runs (ToolInfo 12413-12427 has none). Subagent calls pass, because blocking Agent already forces a plan before any subagent exists. | assumed, confirm by T13
 - D7 Task boundary: a new task starts at `turn.start` with non-empty `text` (an empty text means a continuation, 12723-12734). The task counts as planned if the plan already has unfinished nodes, or once Claude makes any successful plan-tool call or a mirrored TodoWrite/TaskCreate/TaskUpdate call in this task. | assumed, confirm by T13
-- D8 Escape hatches. The gate denies only when all hold: enforcement is on (plugin `userConfig.enforce`, default true, AND the session flag set by `/todo on|off`); the plan tool registered this session; the plan tool was in the last request's `prompt.compose` tool list; the current task has no plan. A throw anywhere in the gate allows the call. After 3 denies in one turn with no plan call, the gate pauses for the rest of that turn and shows a toast. | assumed, confirm by T01 and T10
+- D8 Escape hatches. The gate denies only when all hold: enforcement is on (plugin `userConfig.enforce`, default true, AND the session flag set by `/todo on|off`); the plan tool registered this session; the plan tool was in the last request's `prompt.compose` tool list; the current task has no plan. A throw anywhere in the gate allows the call. After 3 denies in one turn with no plan call, the gate pauses for the rest of that turn and shows a toast. | confirmed by T01 (userConfig delivery, pinned tool in `e.tools`, model retries after a deny; see spike.md); T10 still confirms the gate itself
 - D9 Manual list editing (`/todo add|start|done|rm`) is removed. `/todo` keeps `open` (no args), `off`, `on` and `clear`. The owner wants no hand-filled lists. | assumed, confirm by T07
 - D10 TodoWrite, TaskCreate and TaskUpdate are mirrored into the tree when they are offered, and they satisfy the gate. The plan tool stays the preferred path in the instructions. | assumed, confirm by T08
 - D11 Node statuses: pending, in_progress, completed, blocked (with note), skipped (with note). A parent's status rolls up from its children. Session activity statuses come only from events; see the plan.md table. | assumed, confirm by T05
@@ -37,7 +37,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 ## Todos
 
 ### T01 Spike: prove plan-tool registration, call handling, deny and event signals live
-- status: todo
+- status: done (#PR, 2026-10-05)
 - needs: none
 - size: M
 - scope: On a throwaway branch `spike/plan-tool` cut from feat/plan-tree, add a minimal second hooks module that registers `plan` in session.start, pins it with tool.describe `isDeferred: false`, allows it in tool.check, answers it from a tool.call hook, denies Edit, Bash and Agent from tool.call, and logs turn.start, turn.complete, tool.check (ask), classic.PermissionRequest, classic.Notification, classic.SubagentStart/Stop, classic.StopFailure, session.compact and session.end to the debug log. Answer Q1-Q10 (plan.md) in `docs/plan-tree/spike.md` with observed evidence. Only the doc merges; spike code never lands on feat/plan-tree.
@@ -167,3 +167,4 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - Persist the plan across `/clear` or resume via `$.store` if the owner wants that.
 
 ## Log
+2026-10-05 T01 #PR spike answered Q1-Q10 (10 observed, 0 unobserved; sub-points unobserved listed in spike.md)
