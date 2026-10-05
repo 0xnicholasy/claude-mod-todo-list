@@ -57,7 +57,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - verify: `npm run check`
 
 ### T03 Define the plan tool contract: schema, input parsing, model-facing result text
-- status: done (#PR, 2026-10-05)
+- status: done (#7, 2026-10-05)
 - needs: T02
 - size: S
 - scope: Add `hooks/plan-tool.ts`: `PLAN_TOOL_SHORT_NAME = 'plan'`; `PLAN_TOOL_DESCRIPTION`; `PLAN_INPUT_SCHEMA` (op `set | add | update | remove | show`, `title`, `nodes` with nested `children` written out to depth 3, no `$ref`, `parent`, `updates[{ id, status?, title?, note? }]`, `id`); `parsePlanInput(raw)` turning loose tool.call arguments into a typed op or `{ error }` (raw is `unknown` per McpToolCallInputFallback 5795-5807; justify in a comment); `formatForModel(plan)`, a plain-text tree of ids, status words and titles capped at 4,000 chars. Errors are returned as `Error:`-prefixed result text (a hook-set `isError` is ignored, T01 Q3); the contract has no isError option.
@@ -174,4 +174,4 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 2026-10-05 T01 #2 spike answered Q1-Q10 (10 observed, 0 unobserved; sub-points unobserved listed in spike.md)
 2026-10-05 amend spike corrections applied to D7, D10, T03, T05-T10, T13 (owner approved)
 2026-10-05 T02 #4 plan model, reducers and new atoms
-2026-10-05 T03 #PR plan tool schema, parser and model-facing text
+2026-10-05 T03 #7 plan tool schema, parser and model-facing text
