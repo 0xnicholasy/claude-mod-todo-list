@@ -2,7 +2,7 @@
 
 ultraplan: plan-tree | branch: feat/plan-tree | base: main | tag: pre-plan-tree-main | created: 2026-10-05
 Status: ACTIVE
-Progress: 9/14 done
+Progress: 10/14 done
 
 ## Goal
 With the plugin loaded, every prompt that leads to tool use gets a plan tree that Claude writes through the plugin's own `mcp__todo-list__plan` tool. That tree is the only record of progress. A pane and status line draw it as a box-drawing tree with per-node status (Completed, In progress, Pending, Blocked, Skipped). They also show what Claude is doing now: working, running a tool, waiting for permission, waiting for your answer, compacting, interrupted, error, and how many subagents are running. State-changing tools are blocked until a plan exists. Enforcement fails open and the user can switch it off.
@@ -30,7 +30,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - D5 The plan is a flat node list with `parentId` and stable path ids ("1", "2.1", "2.1.3"). Ids are never reused after a remove. Max depth 3, max 60 nodes. Inline atom types cannot be recursive. | assumed, confirm by T02
 - D6 Blocked set (main loop only, `agentId` absent): Edit, Write, NotebookEdit, Bash, Agent, Workflow, CronCreate, CronDelete, EnterWorktree, ExitWorktree, RemoteTrigger. Everything else is allowed, including third-party MCP tools, because the API gives no read-only flag before a call runs (ToolInfo 12413-12427 has none). Subagent calls pass, because blocking Agent already forces a plan before any subagent exists. | assumed, confirm by T13
 - D7 Task boundary: a new task starts at `turn.start` for the main loop when the text is non-empty AND does not start with `<task-notification>`. A background-agent completion is a continuation, not a new task (T01 Q7). The task counts as planned if the plan already has unfinished nodes, or once Claude makes any successful plan-tool call or a mirrored TodoWrite/TaskCreate/TaskUpdate call in this task. | revised by T01
-- D8 Escape hatches. The gate denies only when all hold: enforcement is on (plugin `userConfig.enforce`, default true, AND the session flag set by `/todo on|off`); the plan tool registered this session; the plan tool was in the last request's `prompt.compose` tool list; the current task has no plan. A throw anywhere in the gate allows the call. After 3 denies in one turn with no plan call, the gate pauses for the rest of that turn and shows a toast. | confirmed by T01 (userConfig delivery, pinned tool in `e.tools`, model retries after a deny; see spike.md); T10 still confirms the gate itself
+- D8 Escape hatches. The gate denies only when all hold: enforcement is on (plugin `userConfig.enforce`, default true, AND the session flag set by `/todo on|off`); the plan tool registered this session; the plan tool was in the last request's `prompt.compose` tool list; the current task has no plan. A throw anywhere in the gate allows the call. After 3 denies in one turn with no plan call, the gate pauses for the rest of that turn and shows a toast. | confirmed by T01 (userConfig delivery, pinned tool in `e.tools`, model retries after a deny; see spike.md); confirmed by T10 (gate itself)
 - D9 Manual list editing (`/todo add|start|done|rm`) is removed. `/todo` keeps `open` (no args), `off`, `on` and `clear`. The owner wants no hand-filled lists. | assumed, confirm by T07
 - D10 TodoWrite, TaskCreate and TaskUpdate are mirrored into the tree when they are offered, and they satisfy the gate. The plan tool stays the preferred path in the instructions. TodoWrite does not exist in 2.1.289 and TaskCreate/TaskUpdate are not offered by default (T01 Q6). Mirroring is optional coverage for sessions that enable them; the plan tool is the only default path. | revised by T01, confirm by T08
 - D11 Node statuses: pending, in_progress, completed, blocked (with note), skipped (with note). A parent's status rolls up from its children. Session activity statuses come only from events; see the plan.md table. | assumed, confirm by T05
@@ -120,7 +120,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - verify: `npm run check`; live check of the activity line in T13
 
 ### T10 Enforce the gate with escape hatches; replace the never-block rule
-- status: todo
+- status: done (#PR, 2026-10-05)
 - needs: T09
 - size: M
 - scope: Add a catch-all `tool.call` gate hook running `decideGate`. A deny returns `{ deny }` and increments `task.denies`; on the first deny of a turn show the user toast "Blocked <tool>: no plan yet. /todo off turns this off."; pause shows a toast too. Add `userConfig.enforce` (boolean, default true) to plugin.json and read it from `register(on, options)` (PluginOptions 7316-7328). Add `/todo off|on` setting `enforceSession`. In the project CLAUDE.md replace "The nudge never blocks: no hook returns deny" with "The gate denies only blocked main-loop tools while the task has no plan; it fails open (guard failure, tool unregistered or not offered, enforcement off, 3 denies in a turn)".
@@ -186,3 +186,4 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 2026-10-05 T07 #9 plan tool, tree pane and status line live (3-level schema confirmed)
 2026-10-05 T08 #10 TaskCreate/TaskUpdate (and synthetic TodoWrite) mirrored into the tree
 2026-10-05 T09 #11 session activity events wired to the activity line
+2026-10-05 T10 #PR gate blocks edits until a plan exists; fails open; /todo off|on; userConfig.enforce
