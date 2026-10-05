@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { ActivityState, Plan, PlanNode, PlanStatus } from '../types'
 import type { Seg, TreeLine } from './tree'
-import { buildTree, GLYPHS, preferredRows, statusLine } from './tree'
+import { buildTree, GLYPHS, paneRows, preferredRows, statusLine } from './tree'
 
 const node = (id: string, status: PlanStatus, extra: Partial<PlanNode> = {}): PlanNode => {
   const parts = id.split('.')
@@ -185,7 +185,7 @@ test('a completed branch collapses to one dim line with a dim count', () => {
   expect(lines.some(l => l.text.includes('1.1'))).toBe(false)
 })
 
-test('a current node 3 levels deep stays visible at maxLines 8 with an accurate +N more', () => {
+test('a current node 3 levels deep stays visible at maxLines 8 with a labelled +N more', () => {
   const deep = planOf(
     node('1', 'completed'),
     node('2', 'pending'),
@@ -197,21 +197,17 @@ test('a current node 3 levels deep stays visible at maxLines 8 with an accurate 
     node('3.2.3', 'pending'),
     node('4', 'pending'),
   )
-  const full = buildTree(deep, idle, { maxLines: 40 })
   const lines = buildTree(deep, idle, { maxLines: 8 })
   expect(lines).toHaveLength(8)
-  expect(segOf(lines[6] as TreeLine, 'T3.2.2')).toMatchObject({ bold: true, color: 'cyan' })
-  const hidden = full.length - (lines.length - 1)
-  expect(lines[lines.length - 1]?.text).toBe(`+${hidden} more`)
   expect(texts(lines)).toEqual([
-    'Add CSV',
-    `${'━'.repeat(17)}${'─'.repeat(23)}  3/7 · 43%`,
-    '',
+    'Add CSV  ━━━━─────  3/7',
     '├─ ✓ 1 T1',
+    '├─ ○ 2 T2',
     padded('├─ ◉ 3 T3', '2/4'),
     padded('│  └─ ◉ 3.2 T3.2', '1/3'),
     '│     ├─ ◉ 3.2.2 T3.2.2 ◂',
-    `+${hidden} more`,
+    '└─ ○ 4 T4',
+    '+3 more · 2 done, 1 pending',
   ])
 })
 
@@ -299,7 +295,7 @@ test('truncation keeps the paths to every running leaf', () => {
   expect(shown.some(t => t.includes('3.1 T3.1'))).toBe(true)
   expect(shown.some(t => t.includes('3.3 T3.3'))).toBe(true)
   expect(shown.some(t => t.includes('3 T3'))).toBe(true)
-  expect(shown[shown.length - 1]).toMatch(/^\+\d+ more$/)
+  expect(shown[shown.length - 1]).toMatch(/^\+\d+ more · \d+ pending$/)
 })
 
 test('statusLine names the first running leaf and counts the others', () => {
@@ -378,4 +374,101 @@ test('preferredRows counts every line the tree would draw with no limit', () => 
   expect(preferredRows(twoLevel, idle)).toBe(9)
   expect(preferredRows(twoLevel, toolActivity)).toBe(10)
   expect(preferredRows(planOf(), idle)).toBe(1)
+})
+
+// The owner's shape: 6 groups of 3, everything done except 3.2 which is blocked with a long note.
+const owner = (): Plan => {
+  const nodes: PlanNode[] = []
+  for (let g = 1; g <= 6; g++) {
+    nodes.push(node(`${g}`, g === 3 ? 'blocked' : 'completed', { title: `Group ${g}` }))
+    for (let k = 1; k <= 3; k++) {
+      const blocked = g === 3 && k === 2
+      nodes.push(
+        node(`${g}.${k}`, blocked ? 'blocked' : 'completed', {
+          title: `Step ${g}.${k}`,
+          ...(blocked ? { note: 'waiting on the owner to confirm the long running migration window '.repeat(3) } : {}),
+        }),
+      )
+    }
+  }
+
+  return { title: 'Six-group demo plan', nodes, issued: [] }
+}
+
+test('truncation keeps tree order', () => {
+  const rows = texts(buildTree(owner(), idle, { maxLines: 8, width: 80 }))
+  const ids = rows.map(t => /(\d(?:\.\d)?) (?:Group|Step)/.exec(t)?.[1]).filter((x): x is string => x !== undefined)
+  expect(ids).toEqual([...ids].sort((x, y) => x.localeCompare(y, undefined, { numeric: true })))
+})
+
+test('completed top-level runs fold into one line when the rows do not fit', () => {
+  const rows = texts(buildTree(owner(), idle, { maxLines: 6, width: 80 }))
+  expect(rows).toContain('✓ 1–2, 4–6 done')
+  const lone = planOf(node('1', 'completed'), node('2', 'in_progress'), node('3', 'completed'), node('4', 'pending'), node('5', 'pending'))
+  expect(texts(buildTree(lone, idle, { maxLines: 5, width: 80 }))).toContain('✓ 1, 3 done')
+})
+
+test('the overflow label counts hidden rows by status and omits zeros', () => {
+  const plan = planOf(
+    node('1', 'in_progress'),
+    node('1.1', 'in_progress'),
+    node('1.2', 'pending'),
+    node('1.3', 'pending'),
+    node('1.4', 'completed'),
+    node('1.5', 'blocked'),
+    node('1.6', 'pending'),
+  )
+  const rows = texts(buildTree(plan, idle, { maxLines: 6 }))
+  expect(rows[rows.length - 1]).toBe('+3 more · 1 done, 1 blocked, 1 pending')
+  const none = planOf(node('1', 'in_progress'), node('1.1', 'in_progress'), node('1.2', 'pending'), node('1.3', 'pending'), node('1.4', 'pending'))
+  expect(texts(buildTree(none, idle, { maxLines: 5 })).pop()).toBe('+2 more · 2 pending')
+})
+
+test('at maxLines 6 the owner shape shows the folded line, the blocked path and a labelled more line', () => {
+  const rows = texts(buildTree(owner(), idle, { maxLines: 6, width: 100 }))
+  expect(rows).toHaveLength(6)
+  expect(rows[0]).toContain('Six-group demo plan')
+  expect(rows[1]).toBe('✓ 1–2, 4–6 done')
+  expect(rows[2]).toContain('■ 3 Group 3')
+  expect(rows.some(t => t.includes('3.2 Step 3.2') && t.includes('◂'))).toBe(true)
+  expect(rows[rows.length - 1]).toMatch(/^\+\d+ more · \d+ done/)
+})
+
+test('under 10 lines the header is one line with no blank, and the activity line shows only when busy', () => {
+  const calm = texts(buildTree(twoLevel, idle, { maxLines: 9, width: 56 }))
+  expect(calm[0]).toMatch(/^Add CSV {2}━+─+ {2}3\/6$/)
+  expect(calm[1]).toContain('1 T1')
+  expect(calm.includes('')).toBe(false)
+  const busyRows = texts(buildTree(twoLevel, toolActivity, { maxLines: 9, width: 56 }))
+  expect(busyRows[1]).toBe('◉ Running Bash · 1 subagent')
+  const roomy = texts(buildTree(twoLevel, idle, { maxLines: 10, width: 56 }))
+  expect(roomy[2]).toBe('')
+})
+
+test('no line is longer than the width with a long blocked note at widths 40, 56 and 120', () => {
+  for (const width of [40, 56, 120]) {
+    for (const maxLines of [6, 20]) {
+      for (const line of buildTree(owner(), idle, { maxLines, width })) {
+        expect(line.text.length).toBeLessThanOrEqual(width)
+      }
+    }
+  }
+  const row = texts(buildTree(owner(), idle, { maxLines: 20, width: 56 })).find(t => t.includes('3.2 ')) ?? ''
+  expect(row).toContain('3.2 Step 3.2')
+  expect(row).toContain('(blocked: ')
+})
+
+test('a blocked parent shows no (blocked) text, and a blocked leaf without a note shows none either', () => {
+  const rows = texts(buildTree(owner(), idle, { maxLines: 20, width: 100 }))
+  const parent = rows.find(t => t.includes('3 Group 3')) ?? ''
+  expect(parent).not.toContain('blocked')
+  const bare = planOf(node('1', 'blocked'), node('2', 'pending'))
+  expect(texts(buildTree(bare, idle, { maxLines: 20 })).find(t => t.includes('1 T1'))).toBe('├─ ■ 1 T1')
+})
+
+test('paneRows asks for what the tree wants, clamped to 6..20', () => {
+  expect(paneRows(planOf(), idle)).toBe(6)
+  expect(paneRows(owner(), idle)).toBe(12)
+  const huge = planOf(...Array.from({ length: 40 }, (_, i) => node(`${i + 1}`, 'pending')))
+  expect(paneRows(huge, idle)).toBe(20)
 })

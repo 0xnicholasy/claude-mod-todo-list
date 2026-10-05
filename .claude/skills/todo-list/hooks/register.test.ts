@@ -150,6 +150,7 @@ test('session.start does not invalidate tool.describe when registration fails', 
 
 test('/todo with no args opens the pane', async ($, on) => {
   setup(on)
+  on('ui.panes', async () => ({ value: [] }))
   const opened: string[] = []
   on('ui.open', async (_$, e) => {
     opened.push(e.id)
@@ -163,6 +164,7 @@ test('/todo with no args opens the pane', async ($, on) => {
 
 test('/todo opens the pane with the dock width and a row count that fits the plan', async ($, on) => {
   setup(on)
+  on('ui.panes', async () => ({ value: [] }))
   const asked: Array<{ rows?: number; columns?: number }> = []
   on('ui.open', async (_$, e) => {
     asked.push({ rows: e.rows, columns: e.columns })
@@ -179,8 +181,29 @@ test('/todo opens the pane with the dock width and a row count that fits the pla
   ])
 })
 
+test('/todo closes an open pane first so the open asks for the height the plan wants now', async ($, on) => {
+  setup(on)
+  const calls: string[] = []
+  const pane = { id: 'todo', title: 'Plan', isShown: true, isFocused: false, isPlaced: true }
+  on('ui.panes', async () => ({ value: [pane] }))
+  on('ui.close', async (_$, e) => {
+    calls.push(`close ${e.id}`)
+
+    return { value: undefined }
+  })
+  on('ui.open', async (_$, e) => {
+    calls.push(`open ${e.id} ${e.rows}`)
+
+    return { value: { isPlaced: true as const } }
+  })
+  await $.tool.call(SET)
+  await $.command.run(todo(''))
+  expect(calls).toEqual(['close todo', 'open todo 7'])
+})
+
 test('/todo adds the fullscreen tip only on a wide main-screen layout', async ($, on) => {
   setup(on)
+  on('ui.panes', async () => ({ value: [] }))
   on('ui.open', async () => ({ value: { isPlaced: true as const } }))
   const tip = 'Tip: the fullscreen layout docks this pane beside the transcript.'
   const withPresentation = (isFullscreen: boolean, columns: number): CommandRunInput => ({
