@@ -2,7 +2,7 @@
 
 ultraplan: plan-tree | branch: feat/plan-tree | base: main | tag: pre-plan-tree-main | created: 2026-10-05
 Status: ACTIVE
-Progress: 12/14 done
+Progress: 13/14 done
 
 ## Goal
 With the plugin loaded, every prompt that leads to tool use gets a plan tree that Claude writes through the plugin's own `mcp__todo-list__plan` tool. That tree is the only record of progress. A pane and status line draw it as a box-drawing tree with per-node status (Completed, In progress, Pending, Blocked, Skipped). They also show what Claude is doing now: working, running a tool, waiting for permission, waiting for your answer, compacting, interrupted, error, and how many subagents are running. State-changing tools are blocked until a plan exists. Enforcement fails open and the user can switch it off.
@@ -147,7 +147,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - verify: `npm run check`; `grep -n "never blocks\|/todo add" README.md CLAUDE.md` returns nothing
 
 ### T13 Live acceptance run
-- status: todo
+- status: done (#PR, 2026-10-05)
 - needs: T12
 - size: S
 - scope: In a live session run: (1) Q&A prompt: no plan, no deny. (2) Edit request: first Edit denied, Claude calls the plan tool, the Edit runs. (3) AskUserQuestion shows "Waiting for your answer". (4) A permission ask shows "Waiting for permission: <tool>". (5) A subagent shows "1 subagent". (6) `/todo off`: Edit allowed with no plan. (7) `/compact` keeps the plan and the next prompt's context carries it; `/clear` resets it. (8) Esc: "Interrupted". (9) A finished plan collapses. (10) Follow-up prompt after a finished plan: the gate re-arms. (11) A background subagent finishing does not re-arm the gate. Mirroring is not asserted in a default run (tools not offered). Record pass or fail per step in the Log.
@@ -174,6 +174,8 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - T09: with parallel tool calls, the first toolEnd drops the status to Working while another tool still runs.
 - T09: a subagent's permission prompt shows as the main session waiting.
 - T09: the permission and AskUserQuestion states were not captured live because dialogs cover the pane; T13 records this.
+- T13: after `/clear` the pane resets to "No plan yet." but the status line keeps the old `Plan N/N` until the next event; the session.end handler (register.tsx:312) refreshes the status before the plan atom resets. Cosmetic, self-heals on the next prompt.
+- T13: in auto mode a subagent's permission ask shows as `Waiting for permission: Bash|SubagentHandback` on the main session (same as the T09 item above, observed live).
 
 ## Log
 2026-10-05 T01 #2 spike answered Q1-Q10 (10 observed, 0 unobserved; sub-points unobserved listed in spike.md)
@@ -189,3 +191,15 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 2026-10-05 T10 #12 gate blocks edits until a plan exists; fails open; /todo off|on; userConfig.enforce
 2026-10-05 T11 #13 old todo-list modules, tests and atoms deleted
 2026-10-05 T12 #14 README, CLAUDE.md stack line and manifest 0.2.0
+2026-10-05 T13 #PR live acceptance run
+T13 step 1: pass - Q&A "What is 2+2?" answered "Four.", pane stayed "No plan yet.", no Blocked toast
+T13 step 2: pass - headless stream-json: first Edit -> tool_result is_error "Blocked Edit: there is no plan for this task yet. Call mcp__todo-list__plan with {"op":"set",...} first, then retry Edit."; next call mcp__todo-list__plan set, then Edit ran ("updated successfully"). Live toast on screen: "todo-list: Blocked Edit: no plan yet. /todo off turns this off."
+T13 step 3: unobservable - the AskUserQuestion dialog covers the pane; covered by register.test.ts "AskUserQuestion shows Waiting for your answer while next is pending". After the answer the pane returned to "Idle" with the tree intact.
+T13 step 4: pass - status line "todo-list: Plan 0/3 · Running background sleep agent · Waiting for permission: Agent · 1 subagent" (pane line "Waiting for permission: Agent"); also covered by register.test.ts "tool.check ask shows Waiting for permission"
+T13 step 5: pass - status line "Plan 0/3 · Running background sleep agent · Idle · 1 subagent"; pane "Idle · 1 subagent"
+T13 step 6: pass - after "/todo off", Edit "Eighth line." ran first try, no plan call, no Blocked toast; README.txt tail "Eighth line."
+T13 step 7: pass - after "/compact" the next prompt answered the plan title and ids from context only (no tool call); after "/clear" the pane showed "No plan yet." (status line stayed "Plan 3/3" until the next prompt, see Backlog)
+T13 step 8: pass - Esc during a long reply: status line "todo-list: Interrupted", pane "◉ Interrupted"
+T13 step 9: pass - 2-level plan "Demo": finished branches render "├─ ✓ 1 Phase A (2/2)" and "└─ ✓ 2 Phase B (2/2)", header "Demo 4/4 ██████████████ 100%", status "Plan 4/4"; 2-level render with ◉ ○ ├─ └─ glyphs and 14-cell bar seen at "Demo 2/4 ███████░░░░░░░ 50%"
+T13 step 10: pass - with a finished 3/3 plan, a follow-up "call Edit first" prompt got the toast "Blocked Edit: no plan yet." and Claude re-planned ("Append 'Sixth line.'")
+T13 step 11: unobservable - the background agent finished after the plan was done and the notification turn made no Edit call, so no deny was exercised; covered by gate.test.ts "empty text and task-notification prompts keep the task unchanged". No Blocked toast appeared.
