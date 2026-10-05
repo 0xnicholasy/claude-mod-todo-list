@@ -72,6 +72,7 @@ declare module 'claude-code' {
       enforceSession: boolean
       accentOverride: string | null
       planTool: { name: string | null; offered: boolean }
+      paneFit: { columns: number; rows: number; placement: string; wantRows: number } | null
     }
   }
 }
