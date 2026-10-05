@@ -554,3 +554,75 @@ test('gate: a throwing toast does not change the deny', async ($, on) => {
   expect(denied.deny).toContain(TOOL)
   expect(denied.result).toBeUndefined()
 })
+
+// Draws the pane and returns the element tree as JSON, so a test can look for a colour.
+const drawPane = async ($: Engine, bodyColumns = 60): Promise<string> => {
+  const element = await $.ui.render({
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'todo',
+    viewport: { columns: 120, rows: 40 },
+    props: {
+      title: 'Plan',
+      isFocused: false,
+      bodyColumns,
+      placement: 'inline',
+      scroll: { offset: 0, bodyRows: 20 },
+      view: {},
+    },
+  })
+
+  return JSON.stringify(element)
+}
+const STARTED = { tool: TOOL, op: 'update', updates: [{ id: '1.1', status: 'in_progress' }] }
+
+test('/todo color sets a session accent that the pane uses, and /todo color reset clears it', async ($, on) => {
+  setup(on)
+  await $.tool.call(SET)
+  await $.tool.call(STARTED)
+  expect(await drawPane($)).toContain('"color":"cyan"')
+  const set = await $.command.run(todo('color magenta'))
+  expect(set.text).toBe('Accent color set to magenta.')
+  const magenta = await drawPane($)
+  expect(magenta).toContain('"color":"magenta"')
+  expect(magenta).not.toContain('"color":"cyan"')
+  const hex = await $.command.run(todo('color #c084fc'))
+  expect(hex.text).toBe('Accent color set to #c084fc.')
+  expect(await drawPane($)).toContain('"color":"#c084fc"')
+  const reset = await $.command.run(todo('color reset'))
+  expect(reset.text).toBe('Accent color reset.')
+  expect(await drawPane($)).toContain('"color":"cyan"')
+})
+
+test('/todo color rejects a bad value and keeps the accent', async ($, on) => {
+  setup(on)
+  await $.tool.call(SET)
+  await $.tool.call(STARTED)
+  for (const bad of ['color', 'color #12', 'color two words', 'color red;rm', 'color #gggggg']) {
+    expect((await $.command.run(todo(bad))).text).toContain('Usage: /todo')
+  }
+  const out = await drawPane($)
+  expect(out).toContain('"color":"cyan"')
+})
+
+test('the accentColor plugin option is the accent, and a session override wins over it', { options: { accentColor: 'green' } }, async ($, on) => {
+  setup(on)
+  await $.tool.call(SET)
+  await $.tool.call(STARTED)
+  const configured = await drawPane($)
+  expect(configured).toContain('"color":"green"')
+  expect(configured).not.toContain('"color":"cyan"')
+  await $.command.run(todo('color magenta'))
+  expect(await drawPane($)).toContain('"color":"magenta"')
+  await $.command.run(todo('color reset'))
+  expect(await drawPane($)).toContain('"color":"green"')
+})
+
+test('an invalid accentColor plugin option falls back to cyan', { options: { accentColor: 'red;rm' } }, async ($, on) => {
+  setup(on)
+  await $.tool.call(SET)
+  await $.tool.call(STARTED)
+  const out = await drawPane($)
+  expect(out).toContain('"color":"cyan"')
+  expect(out).not.toContain('red;rm')
+})

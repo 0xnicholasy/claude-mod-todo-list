@@ -19,7 +19,7 @@ import {
   touchesPlan,
 } from './plan-tool'
 import { clean } from './sanitize'
-import { buildTree, statusLine } from './tree'
+import { buildTree, DEFAULT_ACCENT, DEFAULT_WIDTH, statusLine } from './tree'
 
 // D4: the registered name is `mcp__<plugin>__<name>`, confirmed by the T01 spike (Q1).
 const PLAN_TOOL_FULL_NAME = `mcp__todo-list__${PLAN_TOOL_SHORT_NAME}`
@@ -29,7 +29,8 @@ const PANE_COLUMNS = 48
 // The host drops $.ui.log text over 4096 characters (T01 extra findings).
 const LOG_LIMIT = 4000
 const ASK_TOOL = 'AskUserQuestion'
-const USAGE = 'Usage: /todo (opens the pane) | /todo clear | /todo off | /todo on'
+const USAGE = 'Usage: /todo (opens the pane) | /todo clear | /todo off | /todo on | /todo color <name|#hex|reset>'
+const ACCENT_PATTERN = /^(#[0-9a-fA-F]{6}|[a-zA-Z]{1,24})$/
 const NOT_OWNER_TEXT =
   'Error: the plan is owned by the main session. Subagents cannot change it; report your progress in your result instead.'
 
@@ -40,6 +41,8 @@ const activity = atom({ plugin: 'todo-list', key: 'activity' } as const, emptyAc
 // D8: the session half of the enforcement switch; `/todo on|off` flips it. The other half is the
 // plugin option `enforce`.
 const enforceSession = atom({ plugin: 'todo-list', key: 'enforceSession' } as const, true as boolean)
+// The session accent set by `/todo color`; null defers to the plugin option `accentColor`.
+const accentOverride = atom({ plugin: 'todo-list', key: 'accentOverride' } as const, null as string | null)
 const planTool = atom({ plugin: 'todo-list', key: 'planTool' } as const, {
   name: null,
   offered: false,
@@ -92,7 +95,20 @@ async function openPane($: EngineInterface): Promise<void> {
 }
 
 async function runTodoCommand($: EngineInterface, args: string): Promise<{ text: string }> {
-  const word = args.trim().toLowerCase()
+  const raw = args.trim()
+  const word = raw.toLowerCase()
+  if (word === 'color' || word.startsWith('color ')) {
+    const value = raw.slice('color'.length).trim()
+    if (value.toLowerCase() === 'reset') {
+      await update($, accentOverride, () => null)
+
+      return { text: 'Accent color reset.' }
+    }
+    if (!ACCENT_PATTERN.test(value)) return { text: USAGE }
+    await update($, accentOverride, () => value)
+
+    return { text: `Accent color set to ${value}.` }
+  }
   if (word === '') {
     await openPane($)
 
@@ -200,6 +216,9 @@ async function mirror($: EngineInterface, name: string, apply: (cur: Plan, now: 
 export const register: Register = (on, options) => {
   // A missing value counts as on (D8).
   const enforceConfig = options.enforce !== false
+  // Effective accent = session override ?? plugin option ?? cyan.
+  const accentConfig =
+    typeof options.accentColor === 'string' && ACCENT_PATTERN.test(options.accentColor) ? options.accentColor : DEFAULT_ACCENT
 
   on('session.start', async ($, e, next) => {
     await guard($, 'session.start', undefined, async () => {
@@ -217,7 +236,7 @@ export const register: Register = (on, options) => {
       await $.command.register({
         name: 'todo',
         description: 'Show the plan pane, clear the plan, or turn plan enforcement off or on',
-        argumentHint: 'clear | off | on',
+        argumentHint: 'clear | off | on | color <name|#hex|reset>',
       })
       // The pane opens unasked only on the terminal under a person at the prompt.
       if (e.isInteractive && e.surface === 'terminal') await openPane($)
@@ -449,22 +468,29 @@ export const register: Register = (on, options) => {
       },
       async () => {
         const { Box, Text } = $.ui.resolve(e)
-        const [p, a] = await Promise.all([read($, plan), read($, activity)])
+        const [p, a, override] = await Promise.all([read($, plan), read($, activity), read($, accentOverride)])
         const maxLines = Math.max(6, (e.viewport?.rows ?? PANE_ROWS) - 4)
+        // bodyColumns is the room inside the pane frame; the viewport is the whole terminal.
+        const width = e.props.bodyColumns > 0 ? e.props.bodyColumns : DEFAULT_WIDTH
+        const accent = override ?? accentConfig
 
         return (
           <Box flexDirection="column">
-            {buildTree(p, a, { maxLines }).map((line, i) => (
-              <Text
-                key={`line-${i}`}
-                color={line.color}
-                bold={line.bold}
-                dimColor={line.dim}
-                inverse={line.inverse}
-                strikethrough={line.strikethrough}
-                wrap="truncate-end"
-              >
-                {line.text}
+            {buildTree(p, a, { maxLines, width, accent }).map((line, i) => (
+              <Text key={`line-${i}`} wrap="truncate-end">
+                {line.segments.length === 1 && line.text === ''
+                  ? ' '
+                  : line.segments.map((s, k) => (
+                      <Text
+                        key={`seg-${k}`}
+                        color={s.color}
+                        bold={s.bold}
+                        dimColor={s.dim}
+                        strikethrough={s.strikethrough}
+                      >
+                        {s.text}
+                      </Text>
+                    ))}
               </Text>
             ))}
           </Box>
