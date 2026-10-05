@@ -9,6 +9,12 @@
       "title": "Enforce plan",
       "description": "Block state-changing tools until a plan exists",
       "default": true
+    },
+    "accentColor": {
+      "type": "string",
+      "title": "Accent color",
+      "description": "Theme key or color for the current step, progress bar and running state (for example cyan, magenta, green, #c084fc)",
+      "default": "cyan"
     }
   }
 }

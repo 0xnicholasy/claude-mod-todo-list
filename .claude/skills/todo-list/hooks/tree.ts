@@ -1,10 +1,7 @@
-// Pure plan-tree rendering: pane lines and the status-line text. No `$` here: register.tsx
-// reads the atoms and passes plain data in, then draws each TreeLine with <Text>.
 import type { ActivityState, Plan, PlanNode, PlanStatus } from '../types'
 import { activityLabel } from './activity'
-import { currentNode, progress } from './plan'
+import { activeLeaves, currentNode, progress } from './plan'
 
-// Box-drawing and geometric glyphs only; tree.test.ts asserts none is Extended_Pictographic.
 export const GLYPHS = {
   completed: '✓',
   in_progress: '◉',
@@ -14,34 +11,60 @@ export const GLYPHS = {
   branch: '├─',
   last: '└─',
   pipe: '│',
-  full: '█',
-  empty: '░',
+  filled: '━',
+  track: '─',
+  marker: '◂',
+  parallel: '∥',
 } as const
 
-export const BAR_CELLS = 14
-const MAX_HEADER_TITLE = 20
+export const DEFAULT_WIDTH = 48
+export const DEFAULT_ACCENT = 'cyan'
+const STATUS_TITLE_MAX = 30
 
-// A row of the pane. Long titles are left to wrap="truncate-end" at render.
-export type TreeLine = {
+// One run of text with one style. A row is a list of these so ids, connectors and titles
+// can be styled apart. There is deliberately no inverse or background field.
+export type Seg = {
   text: string
   color?: string
   bold: boolean
   dim: boolean
-  inverse: boolean
   strikethrough?: boolean
 }
 
-const plain = (text: string): TreeLine => ({ text, bold: false, dim: false, inverse: false })
-
-const bar = (done: number, total: number): string => {
-  const filled = total === 0 ? 0 : Math.round((done / total) * BAR_CELLS)
-
-  return GLYPHS.full.repeat(filled) + GLYPHS.empty.repeat(BAR_CELLS - filled)
+export type TreeLine = {
+  // The segments joined: what the row reads as without colour.
+  text: string
+  segments: Seg[]
 }
+
+export type TreeOptions = { maxLines: number; width?: number; accent?: string }
+
+const seg = (text: string, over: Partial<Seg> = {}): Seg => ({ text, bold: false, dim: false, ...over })
+const dimSeg = (text: string): Seg => seg(text, { dim: true })
+const lineOf = (segments: Seg[]): TreeLine => ({ text: segments.map(s => s.text).join(''), segments })
+const blank = (): TreeLine => lineOf([seg('')])
 
 const percent = (done: number, total: number): number => (total === 0 ? 0 : Math.round((done / total) * 100))
 
-const shorten = (text: string, max: number): string => (text.length <= max ? text : `${text.slice(0, max - 1)}…`)
+const shorten = (text: string, max: number): string => {
+  if (text.length <= max) return text
+
+  return max <= 1 ? '…' : `${text.slice(0, max - 1)}…`
+}
+
+const clamp = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, n))
+
+const bar = (done: number, total: number, accent: string, width: number): Seg[] => {
+  const cells = clamp(width - 16, 10, 40)
+  const filled = total === 0 ? 0 : Math.round((done / total) * cells)
+
+  return [
+    seg(GLYPHS.filled.repeat(filled), { color: accent }),
+    dimSeg(GLYPHS.track.repeat(cells - filled)),
+    seg('  '),
+    dimSeg(`${done}/${total} · ${percent(done, total)}%`),
+  ]
+}
 
 const childrenOf = (nodes: readonly PlanNode[], id: string): PlanNode[] => nodes.filter(n => n.parentId === id)
 
@@ -51,8 +74,13 @@ const leavesUnder = (nodes: readonly PlanNode[], id: string): PlanNode[] => {
   return kids.length === 0 ? [] : kids.flatMap(k => (childrenOf(nodes, k.id).length === 0 ? [k] : leavesUnder(nodes, k.id)))
 }
 
-// The node to highlight: currentNode, or the first blocked leaf when only blocked work is
-// left (currentNode returns null then).
+const countUnder = (nodes: readonly PlanNode[], id: string): string => {
+  const under = leavesUnder(nodes, id)
+  const done = under.filter(n => n.status === 'completed' || n.status === 'skipped').length
+
+  return `${done}/${under.length}`
+}
+
 const highlighted = (plan: Plan): PlanNode | null => {
   const current = currentNode(plan)
   if (current !== null) return current
@@ -60,92 +88,132 @@ const highlighted = (plan: Plan): PlanNode | null => {
   return plan.nodes.find(n => n.status === 'blocked' && childrenOf(plan.nodes, n.id).length === 0) ?? null
 }
 
-const nodeStyle = (status: PlanStatus): Omit<TreeLine, 'text'> => {
+const glyphStyle = (status: PlanStatus, accent: string): Partial<Seg> => {
   switch (status) {
     case 'completed':
-      return { color: 'green', bold: false, dim: true, inverse: false }
+      return { color: 'green' }
     case 'in_progress':
-      return { color: 'cyan', bold: true, dim: false, inverse: false }
+      return { color: accent }
     case 'blocked':
-      return { color: 'yellow', bold: false, dim: false, inverse: false }
+      return { color: 'yellow' }
     case 'skipped':
-      return { bold: false, dim: true, inverse: false, strikethrough: true }
+      return { dim: true }
     case 'pending':
-      return { bold: false, dim: false, inverse: false }
+      return {}
   }
+}
+
+const noteOf = (node: PlanNode): string => {
+  if (node.note !== undefined) {
+    return node.status === 'blocked' || node.status === 'skipped' ? ` (${node.status}: ${node.note})` : ` (${node.note})`
+  }
+
+  return node.status === 'blocked' || node.status === 'skipped' ? ` (${node.status})` : ''
 }
 
 type Row = { line: TreeLine; keep: boolean }
 
-// Rows for `parentId`'s children, depth first. `prefix` carries the parent's pipes.
-const rowsFor = (plan: Plan, parentId: string | null, prefix: string, currentId: string | null): Row[] => {
+type Ctx = { plan: Plan; currentId: string | null; runningIds: readonly string[]; accent: string; width: number }
+
+const PARALLEL_TAG = ` ${GLYPHS.parallel} parallel`
+
+const rowFor = (ctx: Ctx, node: PlanNode, lead: string, hasKids: boolean, collapse: boolean): TreeLine => {
+  const { plan, currentId, runningIds, accent, width } = ctx
+  const isCurrent = node.id === currentId
+  const isRunning = !hasKids && runningIds.includes(node.id)
+  const tag = node.parallel === true && hasKids ? PARALLEL_TAG : ''
+  const count = hasKids ? countUnder(plan.nodes, node.id) : null
+  const note = collapse ? '' : noteOf(node)
+  const marker = isCurrent ? ` ${GLYPHS.marker}` : ''
+  const fixed = lead.length + 2 + node.id.length + 1 + tag.length + note.length + marker.length + (count === null ? 0 : count.length + 1)
+  const title = shorten(node.title, Math.max(1, width - fixed))
+  let titleSeg: Seg
+  let glyphSeg: Seg
+  if (collapse) {
+    titleSeg = dimSeg(title)
+    glyphSeg = dimSeg(GLYPHS[node.status])
+  } else {
+    glyphSeg = seg(GLYPHS[node.status], glyphStyle(node.status, accent))
+    if (isCurrent || isRunning) titleSeg = seg(title, { color: accent, bold: true })
+    else if (hasKids) titleSeg = seg(title, { bold: true })
+    else if (node.status === 'completed') titleSeg = dimSeg(title)
+    else if (node.status === 'in_progress') titleSeg = seg(title, { bold: true })
+    else if (node.status === 'skipped') titleSeg = seg(title, { dim: true, strikethrough: true })
+    else titleSeg = seg(title)
+  }
+  const segs: Seg[] = [dimSeg(lead), glyphSeg, seg(' '), dimSeg(node.id), seg(' '), titleSeg]
+  if (tag !== '') segs.push(dimSeg(tag))
+  if (note !== '') segs.push(dimSeg(note))
+  if (marker !== '') segs.push(dimSeg(marker))
+  if (count !== null) {
+    const used = segs.reduce((n, s) => n + s.text.length, 0)
+    segs.push(seg(' '.repeat(Math.max(1, width - used - count.length))), dimSeg(count))
+  }
+
+  return lineOf(segs)
+}
+
+const rowsFor = (ctx: Ctx, parentId: string | null, prefix: string): Row[] => {
+  const { plan, runningIds } = ctx
   const kids = plan.nodes.filter(n => n.parentId === parentId)
   const out: Row[] = []
   kids.forEach((node, i) => {
     const isLast = i === kids.length - 1
     const hasKids = childrenOf(plan.nodes, node.id).length > 0
-    const isCurrent = node.id === currentId
-    const isAncestor = currentId !== null && currentId.startsWith(`${node.id}.`)
+    const isRunning = !hasKids && runningIds.includes(node.id)
+    const isAncestor = runningIds.some(id => id.startsWith(`${node.id}.`))
     const collapse = hasKids && node.status === 'completed' && !isAncestor
-    const lead = `${prefix}${isLast ? GLYPHS.last : GLYPHS.branch} ${GLYPHS[node.status]} ${node.id} ${node.title}`
-    let text = lead
-    if (collapse) {
-      const under = leavesUnder(plan.nodes, node.id)
-      text = `${lead} (${under.length}/${under.length})`
-    } else if (node.note !== undefined && (node.status === 'blocked' || node.status === 'skipped')) {
-      text = `${lead} (${node.status}: ${node.note})`
-    } else if (node.note !== undefined) {
-      text = `${lead} (${node.note})`
-    } else if (node.status === 'blocked' || node.status === 'skipped') {
-      text = `${lead} (${node.status})`
-    }
-    const style = nodeStyle(node.status)
-    const line: TreeLine = isCurrent ? { ...style, text, bold: true, inverse: true, dim: false } : { ...style, text }
-    out.push({ line, keep: isCurrent || isAncestor })
+    const lead = `${prefix}${isLast ? GLYPHS.last : GLYPHS.branch} `
+    out.push({ line: rowFor(ctx, node, lead, hasKids, collapse), keep: isRunning || isAncestor })
     if (hasKids && !collapse) {
-      out.push(...rowsFor(plan, node.id, `${prefix}${isLast ? '   ' : `${GLYPHS.pipe}  `}`, currentId))
+      out.push(...rowsFor(ctx, node.id, `${prefix}${isLast ? '   ' : `${GLYPHS.pipe}  `}`))
     }
   })
 
   return out
 }
 
-const activityLine = (activity: ActivityState): TreeLine => {
-  const text = `${activity.phase === 'idle' ? GLYPHS.pending : GLYPHS.in_progress} ${activityLabel(activity) ?? 'Idle'}`
+const activityLine = (activity: ActivityState, accent: string): TreeLine | null => {
+  const label = activityLabel(activity)
+  if (label === undefined) return null
+  const text = `${GLYPHS.in_progress} ${label}`
   switch (activity.phase) {
-    case 'idle':
-      return { ...plain(text), dim: true }
     case 'permission':
     case 'question':
-    case 'interrupted':
-      return { ...plain(text), color: 'yellow' }
+      return lineOf([seg(text, { color: 'yellow' })])
     case 'error':
-      return { ...plain(text), color: 'red' }
+      return lineOf([seg(text, { color: 'red' })])
+    case 'interrupted':
+      return lineOf([dimSeg(text)])
+    case 'idle':
+      return lineOf([dimSeg(`${GLYPHS.pending} ${label}`)])
     case 'working':
     case 'tool':
     case 'compacting':
-      return { ...plain(text), color: 'cyan' }
+      return lineOf([seg(text, { color: accent })])
   }
 }
 
-// Pane lines: header, activity line, then the tree. Past `maxLines` the path to the current
-// node stays, other rows fill the remaining room in order, and "+N more" counts the hidden
-// rows. maxLines below the header, activity line, path and "+N more" is raised to fit them.
-export const buildTree = (plan: Plan, activity: ActivityState, opts: { maxLines: number }): TreeLine[] => {
+export const buildTree = (plan: Plan, activity: ActivityState, opts: TreeOptions): TreeLine[] => {
+  const width = opts.width ?? DEFAULT_WIDTH
+  const accent = opts.accent ?? DEFAULT_ACCENT
+  const act = activityLine(activity, accent)
   if (plan.nodes.length === 0) {
-    const empty = plain('No plan yet.')
+    const empty = lineOf([dimSeg('No plan yet.')])
 
-    return activity.phase === 'idle' && activity.subagents.length === 0
-      ? [{ ...empty, dim: true }]
-      : [{ ...empty, dim: true }, activityLine(activity)]
+    return act === null ? [empty] : [empty, act]
   }
   const { done, total } = progress(plan)
-  const header: TreeLine = {
-    ...plain(`${shorten(plan.title, MAX_HEADER_TITLE)} ${done}/${total} ${bar(done, total)} ${percent(done, total)}%`),
-    bold: true,
-  }
-  const head = [header, activityLine(activity)]
-  const rows = rowsFor(plan, null, '', highlighted(plan)?.id ?? null)
+  const head: TreeLine[] = [
+    lineOf([seg(shorten(plan.title, width), { bold: true })]),
+    lineOf(bar(done, total, accent, width)),
+  ]
+  if (act !== null) head.push(act)
+  head.push(blank())
+  const current = highlighted(plan)
+  // The current step's path stays visible even when it is a blocked or pending leaf.
+  const runningIds = [...new Set([...activeLeaves(plan).map(n => n.id), ...(current === null ? [] : [current.id])])]
+  const rows = rowsFor({ plan, currentId: current?.id ?? null, runningIds, accent, width }, null, '')
   const room = opts.maxLines - head.length
   if (rows.length <= room) return [...head, ...rows.map(r => r.line)]
   const mustKeep = rows.filter(r => r.keep).length
@@ -160,18 +228,20 @@ export const buildTree = (plan: Plan, activity: ActivityState, opts: { maxLines:
     }
   }
 
-  return [...head, ...shown, { ...plain(`+${rows.length - shown.length} more`), dim: true }]
+  return [...head, ...shown, lineOf([dimSeg(`+${rows.length - shown.length} more`)])]
 }
 
-// Status-line text, e.g. `Plan 3/7 · Escaping quotes · Waiting for permission: Bash`.
-// Undefined with no plan and an idle session.
 export const statusLine = (plan: Plan, activity: ActivityState): string | undefined => {
   const label = activityLabel(activity)
   if (plan.nodes.length === 0) return label
   const { done, total } = progress(plan)
   const node = highlighted(plan)
   const parts = [`Plan ${done}/${total}`]
-  if (node !== null) parts.push(node.activeForm ?? node.title)
+  if (node !== null) {
+    const extra = activeLeaves(plan).length - 1
+    const first = shorten(node.activeForm ?? node.title, STATUS_TITLE_MAX)
+    parts.push(extra > 0 ? `${first} +${extra} more running` : first)
+  }
   if (label !== undefined) parts.push(label)
 
   return parts.join(' · ')

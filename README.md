@@ -13,19 +13,29 @@ Run it from the repo root, or pass the absolute path to `.claude/skills/todo-lis
 ## What the pane shows
 
 ```
-Add CSV export                3/7 ██████░░░░░░░░ 43%
+Add CSV export
+━━━━━━━━━━━─────────────────────────────  2/7 · 29%
 ◉ Running Bash · 1 subagent
-├─ ✓ 1 Read the existing exporter (2/2)
-├─ ◉ 2 Write the CSV writer
-│  ├─ ✓ 2.1 Header row
+
+├─ ✓ 1 Read the existing exporter                    2/2
+├─ ◉ 2 Write the CSV writer ∥ parallel               0/3
+│  ├─ ◉ 2.1 Header row ◂
 │  ├─ ◉ 2.2 Escape quotes and commas
 │  └─ ○ 2.3 Stream large files
 ├─ ■ 3 Wire the CLI flag (blocked: flag name?)
 └─ ○ 4 Tests
-+2 more
 ```
 
-The first line is the plan title, leaves done out of total leaves, and a progress bar. The second line is the live activity. The rest is the tree, with each node's id. The pane opens automatically at session start on an interactive terminal, and `/todo` reopens it. The status line shows a short form, for example `Plan 3/7 · Escaping quotes and commas · Running Bash`.
+The first line is the plan title and the second is a progress bar with leaves done out of total leaves. Then comes the live activity, and the rest is the tree, with each node's id. Parent rows show their done/total count at the right edge of the pane. The current step is marked with `◂`; a parallel group shows `∥ parallel` after its title, and every running step in it has the accent colour and a bold title, but only the first carries `◂`. When the tree is too tall, the paths to all running steps stay visible and the rest is summarised as `+N more`.
+
+The accent colour (current step, running steps, progress bar) is cyan by default. Set a default with the `accentColor` option (a theme key or colour such as `magenta` or `#c084fc`); an invalid value falls back to cyan:
+
+```
+claude --plugin-dir .claude/skills/todo-list \
+  --settings '{"pluginConfigs":{"todo-list":{"options":{"accentColor":"#c084fc"}}}}'
+```
+
+`/todo color <name|#hex|reset>` overrides it for the session. The status line shows `Plan 2/7 · Header row +1 more running` while several steps run at once. The pane opens automatically at session start on an interactive terminal, and `/todo` reopens it. The status line shows a short form, for example `Plan 3/7 · Escaping quotes and commas · Running Bash`.
 
 ### Node status
 
@@ -67,6 +77,8 @@ Activity comes from session events, not from Claude's own report.
 | `remove` | `id` | Drops a node and its subtree. Ids are never reused. |
 | `show` | none | Returns the current tree with ids. |
 
+A node may set `parallel: true` (on `set` or `add`). Its children may then be `in_progress` at the same time; anywhere else, only one step may run, and a second `in_progress` leaf is rejected with an error naming the shared parent. A parallel group is shown with an `∥ parallel` tag.
+
 Every answer is the plain-text tree. A failure is a result that starts with `Error:`. The current plan is also attached to each new prompt, so ids stay in sync after a compaction. `/clear` resets the plan.
 
 ## Enforcement
@@ -97,6 +109,7 @@ Enforcement fails open. It also allows every call when the plan tool did not reg
 - `/todo clear`: empty the plan.
 - `/todo off`: turn enforcement off for this session.
 - `/todo on`: turn enforcement back on.
+- `/todo color <name|#hex|reset>`: set the accent colour for this session, or go back to the `accentColor` option (cyan by default).
 
 ## TaskCreate and TaskUpdate mirroring
 

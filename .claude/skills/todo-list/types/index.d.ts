@@ -70,6 +70,7 @@ declare module 'claude-code' {
         since: number
       }
       enforceSession: boolean
+      accentOverride: string | null
       planTool: { name: string | null; offered: boolean }
     }
   }
