@@ -111,7 +111,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - verify: `npm run check`
 
 ### T09 Wire session-activity events
-- status: done (#PR, 2026-10-05)
+- status: done (#11, 2026-10-05)
 - needs: T05, T08
 - size: S
 - scope: In register.tsx feed `reduceActivity` from turn.start; turn.complete (reason); tool.call around `next` (main loop, not the plan tool); AskUserQuestion's tool.call around `next` (question); tool.check with `tool_use_id` and decision `ask` (permission) plus classic.PermissionRequest as a second signal; session.compact around `next` (main loop only); classic.SubagentStart and classic.SubagentStop; classic.StopFailure; session.end with reason `clear` produces sessionClear; ignore turn.complete events with an `agentId`. Log classic.Notification `notification_type` to the debug log only for now. Refresh the status line on each change. Truncate any `$.ui.log` text to 4,000 chars (host drops over 4096).
@@ -185,4 +185,4 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 2026-10-05 T03 #7 plan tool schema, parser and model-facing text
 2026-10-05 T07 #9 plan tool, tree pane and status line live (3-level schema confirmed)
 2026-10-05 T08 #10 TaskCreate/TaskUpdate (and synthetic TodoWrite) mirrored into the tree
-2026-10-05 T09 #PR session activity events wired to the activity line
+2026-10-05 T09 #11 session activity events wired to the activity line
