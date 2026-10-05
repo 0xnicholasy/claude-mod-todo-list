@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import {
+  activeLeaves,
   addNodes,
   currentNode,
   emptyPlan,
@@ -9,6 +10,7 @@ import {
   rollup,
   setPlan,
   updateNodes,
+  validateConcurrency,
 } from './plan'
 import type { Plan, PlanInputNode, PlanResult } from './plan'
 
@@ -196,4 +198,89 @@ test('removing the last child resets the parent to pending instead of keeping it
   const next = ok(removeNode(done, '1.1', 3))
   expect(status(next, '1')).toBe('pending')
   expect(progress(next)).toEqual({ done: 0, total: 1 })
+})
+
+const par = (): Plan =>
+  ok(
+    setPlan(
+      emptyPlan(),
+      'P',
+      [
+        { title: 'Group', parallel: true, children: [{ title: 'A' }, { title: 'B' }] },
+        { title: 'Seq', children: [{ title: 'C' }, { title: 'D' }] },
+      ],
+      1,
+    ),
+  )
+const flag = (p: Plan, id: string): boolean | undefined => p.nodes.find(n => n.id === id)?.parallel
+
+test('parallel survives set, add and update, and false clears it', () => {
+  let plan = par()
+  expect(flag(plan, '1')).toBe(true)
+  expect(flag(plan, '2')).toBeUndefined()
+  plan = ok(addNodes(plan, null, [{ title: 'More', parallel: true, children: [{ title: 'X' }] }], 2))
+  expect(flag(plan, '3')).toBe(true)
+  plan = ok(updateNodes(plan, [{ id: '2', parallel: true }], 3))
+  expect(flag(plan, '2')).toBe(true)
+  plan = ok(updateNodes(plan, [{ id: '1', parallel: false }], 4))
+  expect(flag(plan, '1')).toBeUndefined()
+})
+
+test('parallel on a leaf is rejected in set, add and update', () => {
+  expect(err(setPlan(emptyPlan(), 'P', [{ title: 'Leaf', parallel: true }], 1))).toContain('parallel')
+  expect(err(addNodes(par(), null, [{ title: 'Leaf', parallel: true }], 2))).toContain('parallel')
+  expect(err(updateNodes(par(), [{ id: '1.1', parallel: true }], 2))).toContain('parallel')
+})
+
+test('two in_progress leaves under a parallel parent are allowed', () => {
+  const plan = ok(updateNodes(par(), [{ id: '1.1', status: 'in_progress' }, { id: '1.2', status: 'in_progress' }], 2))
+  expect(status(plan, '1.1')).toBe('in_progress')
+  expect(status(plan, '1.2')).toBe('in_progress')
+  expect(validateConcurrency(plan)).toBeNull()
+})
+
+test('two in_progress leaves across non-parallel branches are rejected naming both ids', () => {
+  const message = err(updateNodes(par(), [{ id: '1.1', status: 'in_progress' }, { id: '2.1', status: 'in_progress' }], 2))
+  expect(message).toContain('"1.1"')
+  expect(message).toContain('"2.1"')
+  expect(message).toContain('"parallel": true')
+  const sibling = err(updateNodes(par(), [{ id: '2.1', status: 'in_progress' }, { id: '2.2', status: 'in_progress' }], 2))
+  expect(sibling).toContain('"2.1"')
+  expect(sibling).toContain('"2.2"')
+})
+
+test('a parallel group inside a sequential parent does not allow a sibling leaf to run alongside', () => {
+  const plan = ok(
+    setPlan(
+      emptyPlan(),
+      'P',
+      [{ title: 'Seq', children: [{ title: 'Group', parallel: true, children: [{ title: 'A' }, { title: 'B' }] }, { title: 'Next' }] }],
+      1,
+    ),
+  )
+  const both = ok(updateNodes(plan, [{ id: '1.1.1', status: 'in_progress' }, { id: '1.1.2', status: 'in_progress' }], 2))
+  expect(validateConcurrency(both)).toBeNull()
+  const message = err(updateNodes(both, [{ id: '1.2', status: 'in_progress' }], 3))
+  expect(message).toContain('"1.2"')
+})
+
+test('activeLeaves returns every in_progress leaf in tree order and skips parents', () => {
+  expect(activeLeaves(par())).toEqual([])
+  const set = ok(updateNodes(par(), [{ id: '1.2', status: 'in_progress' }, { id: '1.1', status: 'in_progress' }], 2))
+  expect(activeLeaves(set).map(n => n.id)).toEqual(['1.1', '1.2'])
+  expect(currentNode(set)?.id).toBe('1.1')
+})
+
+test('clearing parallel while two children are in_progress is rejected and leaves the plan untouched', () => {
+  const running = ok(updateNodes(par(), [{ id: '1.1', status: 'in_progress' }, { id: '1.2', status: 'in_progress' }], 2))
+  const message = err(updateNodes(running, [{ id: '1', parallel: false }], 3))
+  expect(message).toContain('"1.1"')
+  expect(flag(running, '1')).toBe(true)
+})
+
+test('removing the last child of a parallel parent clears its parallel flag', () => {
+  let plan = ok(removeNode(par(), '1.1', 2))
+  expect(flag(plan, '1')).toBe(true)
+  plan = ok(removeNode(plan, '1.2', 3))
+  expect(flag(plan, '1')).toBeUndefined()
 })

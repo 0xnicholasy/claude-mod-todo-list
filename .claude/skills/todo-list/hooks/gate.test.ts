@@ -102,6 +102,8 @@ test('instruction text names the tool and the key rules', () => {
   for (const s of [TOOL, 'in_progress', 'completed', 'blocked', 'skipped', 'AskUserQuestion', 'Pure Q&A', `ToolSearch (query "select:${TOOL}")`]) {
     expect(t).toContain(s)
   }
+  expect(t).toContain('"parallel": true')
+  expect(t).not.toContain('Keep exactly one leaf in_progress at a time')
 })
 
 test('planContext is undefined for an empty plan and lists the plan otherwise', () => {

@@ -17,9 +17,9 @@ export const MAX_NOTE = 200
 // setPlan and addNodes take nested input: { title, activeForm?, children? }. It becomes flat
 // nodes whose ids are paths ("1", "1.1", "1.1.1") handed out in input order. The plan tool
 // parser (T03) turns tool input into this shape.
-export type PlanInputNode = { title: string; activeForm?: string; children?: PlanInputNode[] }
+export type PlanInputNode = { title: string; activeForm?: string; parallel?: boolean; children?: PlanInputNode[] }
 
-export type NodeUpdate = { id: string; status?: PlanStatus; title?: string; note?: string }
+export type NodeUpdate = { id: string; status?: PlanStatus; title?: string; note?: string; parallel?: boolean }
 
 export type PlanResult = { plan: Plan } | { error: string }
 
@@ -103,6 +103,11 @@ const flatten = (
       const form = checkText('activeForm', item.activeForm, MAX_TITLE, true)
       if ('error' in form) return form
       if (form.text !== '') node.activeForm = form.text
+    }
+    const hasKids = item.children !== undefined && item.children.length > 0
+    if (item.parallel === true) {
+      if (!hasKids) return { error: `"${node.title}" has "parallel": true but no children; parallel only applies to a parent` }
+      node.parallel = true
     }
     out.push(node)
     if (item.children !== undefined && item.children.length > 0) {
@@ -213,13 +218,31 @@ export const updateNodes = (prev: Plan, updates: readonly NodeUpdate[], now: num
         if (n.text === '') delete node.note
         else node.note = n.text
       }
+      if (u.parallel !== undefined) {
+        if (u.parallel && isLeaf(nodes, node.id)) return { error: `"${node.id}" has no children, so "parallel": true does not apply; set it on a parent` }
+        if (u.parallel) node.parallel = true
+        else delete node.parallel
+      }
       node.updatedAt = now
     }
+    const next = rollup({ ...prev, nodes }, now)
+    // Clearing parallel can strand concurrent leaves, so it is checked too.
+    if (updates.some(u => u.status === 'in_progress' || u.parallel === false)) {
+      const conflict = validateConcurrency(next)
+      if (conflict !== null) return { error: conflict }
+    }
 
-    return { plan: rollup({ ...prev, nodes }, now) }
+    return { plan: next }
   })
 
 // Drops a node and its subtree. Ids already issued stay recorded, so they are never reused.
+const withoutParallel = (n: PlanNode): PlanNode => {
+  const rest = { ...n }
+  delete rest.parallel
+
+  return rest
+}
+
 export const removeNode = (prev: Plan, id: string, now: number): PlanResult =>
   safe(() => {
     if (!prev.nodes.some(n => n.id === id)) return { error: `unknown id "${clean(String(id))}"; ${validIds(prev)}` }
@@ -229,7 +252,7 @@ export const removeNode = (prev: Plan, id: string, now: number): PlanResult =>
     // A parent left without children becomes a leaf: its derived status is stale, so restart it.
     const parent = prev.nodes.find(n => n.id === id)?.parentId ?? null
     if (parent !== null && isLeaf(nodes, parent)) {
-      return { plan: rollup({ ...prev, nodes: nodes.map(n => (n.id === parent ? { ...n, status: 'pending', updatedAt: now } : n)), issued }, now) }
+      return { plan: rollup({ ...prev, nodes: nodes.map(n => (n.id === parent ? withoutParallel({ ...n, status: 'pending', updatedAt: now }) : n)), issued }, now) }
     }
 
     return { plan: rollup({ ...prev, nodes, issued }, now) }
@@ -252,5 +275,41 @@ export const currentNode = (plan: Plan): PlanNode | null => {
 }
 
 // True while any leaf is pending, in_progress or blocked (blocked work is still open).
+export const activeLeaves = (plan: Plan): PlanNode[] => leaves(plan).filter(n => n.status === 'in_progress')
+
+const ancestorsOf = (plan: Plan, id: string): string[] => {
+  const byId = new Map(plan.nodes.map(n => [n.id, n]))
+  const out: string[] = []
+  let parent = byId.get(id)?.parentId ?? null
+  while (parent !== null) {
+    out.push(parent)
+    parent = byId.get(parent)?.parentId ?? null
+  }
+
+  return out
+}
+
+// Concurrency rule: two in_progress leaves may coexist only when their lowest common ancestor is
+// itself a node with parallel: true. Leaves with no common ancestor (two top-level branches) have
+// none, so they are never allowed together. A parallel group nested in a sequential parent therefore
+// does not allow a leaf outside the group to run alongside it, and two leaves inside one sequential
+// child of a parallel node are rejected (the lowest common ancestor is that sequential child).
+export const validateConcurrency = (plan: Plan): string | null => {
+  const active = activeLeaves(plan)
+  const byId = new Map(plan.nodes.map(n => [n.id, n]))
+  for (const [i, a] of active.entries()) {
+    const aUp = ancestorsOf(plan, a.id)
+    for (const b of active.slice(i + 1)) {
+      const common = ancestorsOf(plan, b.id).find(id => aUp.includes(id)) ?? null
+      if (common !== null && byId.get(common)?.parallel === true) continue
+      const where = common === null ? 'the top level' : `"${common}"`
+
+      return `"${a.id}" and "${b.id}" cannot both be in_progress: their closest shared parent is ${where}, which is not parallel. Put them under a parent with "parallel": true, or finish one first`
+    }
+  }
+
+  return null
+}
+
 export const hasUnfinished = (plan: Plan): boolean =>
   leaves(plan).some(n => n.status === 'pending' || n.status === 'in_progress' || n.status === 'blocked')
