@@ -43,6 +43,7 @@ export type ActivityState = {
   phase: ActivityPhase
   tool?: string
   detail?: string
+  resume?: ActivityPhase
   subagents: string[]
   since: number
 }
@@ -82,6 +83,7 @@ declare module 'claude-code' {
         phase: 'idle' | 'working' | 'tool' | 'permission' | 'question' | 'compacting' | 'interrupted' | 'error'
         tool?: string
         detail?: string
+        resume?: 'idle' | 'working' | 'tool' | 'permission' | 'question' | 'compacting' | 'interrupted' | 'error'
         subagents: string[]
         since: number
       }
