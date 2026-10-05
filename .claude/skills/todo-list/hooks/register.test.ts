@@ -716,3 +716,62 @@ test('a pane with few body rows keeps the current step in view and counts what i
   expect(out).toContain('Leaf 17')
   expect(out).toMatch(/\+\d+ more/)
 })
+
+// A render that sees a new terminal size re-opens the listed pane once; the re-open is not awaited
+// by the render, so the tests let it settle.
+const drawAt = async ($: Engine, columns: number, rows: number): Promise<void> => {
+  await $.ui.render({
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'todo',
+    viewport: { columns, rows },
+    props: { title: 'Plan', isFocused: false, bodyColumns: 60, placement: 'inline', scroll: { offset: 0, bodyRows: 10 }, view: {} },
+  })
+  for (let i = 0; i < 2000; i++) await Promise.resolve()
+}
+const recordPane = (on: On, listed: boolean): string[] => {
+  const calls: string[] = []
+  on('ui.panes', async () => ({
+    value: listed ? [{ id: 'todo', title: 'Plan', isShown: true, isFocused: false, isPlaced: true }] : [],
+  }))
+  on('ui.close', async (_$, e) => {
+    calls.push(`close ${e.id}`)
+
+    return { value: undefined }
+  })
+  on('ui.open', async (_$, e) => {
+    calls.push(`open ${e.id} ${e.rows}`)
+
+    return { value: { isPlaced: true as const } }
+  })
+
+  return calls
+}
+
+test('a render at a new viewport size closes and re-opens the pane once with the plan rows', async ($, on) => {
+  setup(on)
+  const calls = recordPane(on, true)
+  await $.tool.call(SET)
+  await drawAt($, 120, 20)
+  expect(calls).toEqual(['close todo', 'open todo 7'])
+  await drawAt($, 120, 45)
+  expect(calls).toEqual(['close todo', 'open todo 7', 'close todo', 'open todo 7'])
+})
+
+test('a render at the same viewport size twice re-opens nothing the second time', async ($, on) => {
+  setup(on)
+  const calls = recordPane(on, true)
+  await drawAt($, 120, 20)
+  const first = calls.length
+  await drawAt($, 120, 20)
+  expect(first).toBe(2)
+  expect(calls).toHaveLength(first)
+})
+
+test('a pane the person closed is never re-opened by a render', async ($, on) => {
+  setup(on)
+  const calls = recordPane(on, false)
+  await drawAt($, 120, 20)
+  await drawAt($, 46, 45)
+  expect(calls).toEqual([])
+})

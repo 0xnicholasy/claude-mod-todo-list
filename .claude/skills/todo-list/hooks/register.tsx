@@ -3,6 +3,8 @@ import type { CommandPresentation, EngineInterface, Register } from 'claude-code
 import type { Plan, PlanToolState, TaskState } from '../types'
 import { emptyActivity, reduceActivity } from './activity'
 import type { ActivityEvent } from './activity'
+import { needsRefit } from './fit'
+import type { PaneFit } from './fit'
 import type { GateDecision } from './gate'
 import { decideGate, INSTRUCTION_ID, INSTRUCTION_TEXT, MAX_DENIES, onNewPrompt, onPlanTouched, planContext } from './gate'
 import { ingestTaskCreate, ingestTaskUpdate, ingestTodoWrite } from './ingest'
@@ -49,6 +51,10 @@ const planTool = atom({ plugin: 'todo-list', key: 'planTool' } as const, {
   name: null,
   offered: false,
 } as PlanToolState)
+
+// What the pane was last re-opened for; null until the first re-open. Written only from refitPane
+// (state writes are refused while a render draws).
+const paneFit = atom({ plugin: 'todo-list', key: 'paneFit' } as const, null as PaneFit | null)
 
 const guard = async <T,>(
   $: EngineInterface,
@@ -104,6 +110,16 @@ async function openPane($: EngineInterface, resize = false): Promise<void> {
   const rows = paneRows(p, a)
   if (resize && (await $.ui.panes()).some(pane => pane.id === PANE)) await $.ui.close({ id: PANE })
   await $.ui.open({ id: PANE, title: 'Plan', rows, columns: PANE_COLUMNS })
+}
+
+// Re-opens the listed pane so the host sizes it for the terminal and plan as they are now.
+// The fit is recorded first: the re-open redraws the pane, and that render must find the same
+// fit and stop. A pane the person closed is not listed and is left closed.
+async function refitPane($: EngineInterface, fit: PaneFit): Promise<void> {
+  if (!(await $.ui.panes()).some(pane => pane.id === PANE)) return
+  await update($, paneFit, () => fit)
+  await $.ui.close({ id: PANE })
+  await $.ui.open({ id: PANE, title: 'Plan', rows: fit.wantRows, columns: PANE_COLUMNS })
 }
 
 async function runTodoCommand(
@@ -500,6 +516,21 @@ export const register: Register = (on, options) => {
         // bodyColumns is the room inside the pane frame; the viewport is the whole terminal.
         const width = e.props.bodyColumns > 0 ? e.props.bodyColumns : DEFAULT_WIDTH
         const accent = override ?? accentConfig
+        // The host keeps the size a pane opened at, and a change of height alone does not redraw
+        // it. A render that sees another terminal size, placement or plan height re-opens it.
+        // Fired and not awaited: the re-open closes the instance being drawn. Main view only.
+        if (e.viewport !== undefined && e.props.view?.agentId === undefined) {
+          const fit: PaneFit = {
+            columns: e.viewport.columns,
+            rows: e.viewport.rows,
+            placement: e.props.placement,
+            wantRows: paneRows(p, a),
+          }
+          const prev = await read($, paneFit)
+          if (needsRefit(prev, fit)) {
+            void guard($, 'refit pane', undefined, () => refitPane($, fit))
+          }
+        }
 
         return (
           <Box flexDirection="column">
