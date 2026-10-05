@@ -147,7 +147,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - verify: `npm run check`; `grep -n "never blocks\|/todo add" README.md CLAUDE.md` returns nothing
 
 ### T13 Live acceptance run
-- status: done (#PR, 2026-10-05)
+- status: done (#15, 2026-10-05)
 - needs: T12
 - size: S
 - scope: In a live session run: (1) Q&A prompt: no plan, no deny. (2) Edit request: first Edit denied, Claude calls the plan tool, the Edit runs. (3) AskUserQuestion shows "Waiting for your answer". (4) A permission ask shows "Waiting for permission: <tool>". (5) A subagent shows "1 subagent". (6) `/todo off`: Edit allowed with no plan. (7) `/compact` keeps the plan and the next prompt's context carries it; `/clear` resets it. (8) Esc: "Interrupted". (9) A finished plan collapses. (10) Follow-up prompt after a finished plan: the gate re-arms. (11) A background subagent finishing does not re-arm the gate. Mirroring is not asserted in a default run (tools not offered). Record pass or fail per step in the Log.
@@ -191,7 +191,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 2026-10-05 T10 #12 gate blocks edits until a plan exists; fails open; /todo off|on; userConfig.enforce
 2026-10-05 T11 #13 old todo-list modules, tests and atoms deleted
 2026-10-05 T12 #14 README, CLAUDE.md stack line and manifest 0.2.0
-2026-10-05 T13 #PR live acceptance run
+2026-10-05 T13 #15 live acceptance run
 T13 step 1: pass - Q&A "What is 2+2?" answered "Four.", pane stayed "No plan yet.", no Blocked toast
 T13 step 2: pass - headless stream-json: first Edit -> tool_result is_error "Blocked Edit: there is no plan for this task yet. Call mcp__todo-list__plan with {"op":"set",...} first, then retry Edit."; next call mcp__todo-list__plan set, then Edit ran ("updated successfully"). Live toast on screen: "todo-list: Blocked Edit: no plan yet. /todo off turns this off."
 T13 step 3: unobservable - the AskUserQuestion dialog covers the pane; covered by register.test.ts "AskUserQuestion shows Waiting for your answer while next is pending". After the answer the pane returned to "Idle" with the tree intact.
