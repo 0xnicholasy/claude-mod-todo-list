@@ -93,7 +93,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - verify: `npm run check`
 
 ### T07 Switch register.tsx to the plan tool, tree pane and status line
-- status: done (#PR, 2026-10-05)
+- status: done (#9, 2026-10-05)
 - needs: T03, T04, T06
 - size: M
 - scope: Rewrite the wiring in register.tsx: session.start `$.tool.register` (store the returned name in `planTool`; a failure is logged and leaves it null) and `$.command.register('todo')`; `tool.describe` pins `isDeferred: false` on the plan tool (required, T01 Q2); no `tool.check` allow for the plan tool, because the tool.call hook answers before any check (T01 Q4); `tool.call` on the plan tool (main loop: parse, reducer, `formatForModel`; a subagent gets a "plan is owned by the main session" result); prompt.compose adds the section and sets `planTool.offered` = the name is in `e.tools` AND the pin was applied (`e.tools` also lists deferred tools); prompt.submit attaches `planContext` when a plan exists; turn.start runs the task lifecycle; `ui.render` Pane draws `buildTree` (columns 48, rows 20); `ui.status`; `/todo` handles only open and clear. Tests stub registration and call by the literal name `mcp__todo-list__plan`. Remove the old TodoWrite/Task* hooks, nudge, manual subcommands and their register.test.ts cases. todos.ts stays on disk, unused.
@@ -180,4 +180,4 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 2026-10-05 T04 #6 tree renderer and status line
 2026-10-05 T06 #8 gate decision, task lifecycle and prompt texts
 2026-10-05 T03 #7 plan tool schema, parser and model-facing text
-2026-10-05 T07 #PR plan tool, tree pane and status line live (3-level schema confirmed)
+2026-10-05 T07 #9 plan tool, tree pane and status line live (3-level schema confirmed)
