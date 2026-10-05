@@ -1,6 +1,6 @@
 import type { ActivityState, Plan, PlanNode, PlanStatus } from '../types'
 import { activityLabel } from './activity'
-import { currentNode, progress } from './plan'
+import { activeLeaves, currentNode, progress } from './plan'
 
 export const GLYPHS = {
   completed: '✓',
@@ -14,6 +14,7 @@ export const GLYPHS = {
   filled: '━',
   track: '─',
   marker: '◂',
+  parallel: '∥',
 } as const
 
 export const DEFAULT_WIDTH = 48
@@ -112,15 +113,19 @@ const noteOf = (node: PlanNode): string => {
 
 type Row = { line: TreeLine; keep: boolean }
 
-type Ctx = { plan: Plan; currentId: string | null; accent: string; width: number }
+type Ctx = { plan: Plan; currentId: string | null; runningIds: readonly string[]; accent: string; width: number }
+
+const PARALLEL_TAG = ` ${GLYPHS.parallel} parallel`
 
 const rowFor = (ctx: Ctx, node: PlanNode, lead: string, hasKids: boolean, collapse: boolean): TreeLine => {
-  const { plan, currentId, accent, width } = ctx
+  const { plan, currentId, runningIds, accent, width } = ctx
   const isCurrent = node.id === currentId
+  const isRunning = !hasKids && runningIds.includes(node.id)
+  const tag = node.parallel === true && hasKids ? PARALLEL_TAG : ''
   const count = hasKids ? countUnder(plan.nodes, node.id) : null
   const note = collapse ? '' : noteOf(node)
   const marker = isCurrent ? ` ${GLYPHS.marker}` : ''
-  const fixed = lead.length + 2 + node.id.length + 1 + note.length + marker.length + (count === null ? 0 : count.length + 1)
+  const fixed = lead.length + 2 + node.id.length + 1 + tag.length + note.length + marker.length + (count === null ? 0 : count.length + 1)
   const title = shorten(node.title, Math.max(1, width - fixed))
   let titleSeg: Seg
   let glyphSeg: Seg
@@ -129,7 +134,7 @@ const rowFor = (ctx: Ctx, node: PlanNode, lead: string, hasKids: boolean, collap
     glyphSeg = dimSeg(GLYPHS[node.status])
   } else {
     glyphSeg = seg(GLYPHS[node.status], glyphStyle(node.status, accent))
-    if (isCurrent) titleSeg = seg(title, { color: accent, bold: true })
+    if (isCurrent || isRunning) titleSeg = seg(title, { color: accent, bold: true })
     else if (hasKids) titleSeg = seg(title, { bold: true })
     else if (node.status === 'completed') titleSeg = dimSeg(title)
     else if (node.status === 'in_progress') titleSeg = seg(title, { bold: true })
@@ -137,6 +142,7 @@ const rowFor = (ctx: Ctx, node: PlanNode, lead: string, hasKids: boolean, collap
     else titleSeg = seg(title)
   }
   const segs: Seg[] = [dimSeg(lead), glyphSeg, seg(' '), dimSeg(node.id), seg(' '), titleSeg]
+  if (tag !== '') segs.push(dimSeg(tag))
   if (note !== '') segs.push(dimSeg(note))
   if (marker !== '') segs.push(dimSeg(marker))
   if (count !== null) {
@@ -148,17 +154,17 @@ const rowFor = (ctx: Ctx, node: PlanNode, lead: string, hasKids: boolean, collap
 }
 
 const rowsFor = (ctx: Ctx, parentId: string | null, prefix: string): Row[] => {
-  const { plan, currentId } = ctx
+  const { plan, runningIds } = ctx
   const kids = plan.nodes.filter(n => n.parentId === parentId)
   const out: Row[] = []
   kids.forEach((node, i) => {
     const isLast = i === kids.length - 1
     const hasKids = childrenOf(plan.nodes, node.id).length > 0
-    const isCurrent = node.id === currentId
-    const isAncestor = currentId !== null && currentId.startsWith(`${node.id}.`)
+    const isRunning = !hasKids && runningIds.includes(node.id)
+    const isAncestor = runningIds.some(id => id.startsWith(`${node.id}.`))
     const collapse = hasKids && node.status === 'completed' && !isAncestor
     const lead = `${prefix}${isLast ? GLYPHS.last : GLYPHS.branch} `
-    out.push({ line: rowFor(ctx, node, lead, hasKids, collapse), keep: isCurrent || isAncestor })
+    out.push({ line: rowFor(ctx, node, lead, hasKids, collapse), keep: isRunning || isAncestor })
     if (hasKids && !collapse) {
       out.push(...rowsFor(ctx, node.id, `${prefix}${isLast ? '   ' : `${GLYPHS.pipe}  `}`))
     }
@@ -204,7 +210,10 @@ export const buildTree = (plan: Plan, activity: ActivityState, opts: TreeOptions
   ]
   if (act !== null) head.push(act)
   head.push(blank())
-  const rows = rowsFor({ plan, currentId: highlighted(plan)?.id ?? null, accent, width }, null, '')
+  const current = highlighted(plan)
+  // The current step's path stays visible even when it is a blocked or pending leaf.
+  const runningIds = [...new Set([...activeLeaves(plan).map(n => n.id), ...(current === null ? [] : [current.id])])]
+  const rows = rowsFor({ plan, currentId: current?.id ?? null, runningIds, accent, width }, null, '')
   const room = opts.maxLines - head.length
   if (rows.length <= room) return [...head, ...rows.map(r => r.line)]
   const mustKeep = rows.filter(r => r.keep).length
@@ -228,7 +237,11 @@ export const statusLine = (plan: Plan, activity: ActivityState): string | undefi
   const { done, total } = progress(plan)
   const node = highlighted(plan)
   const parts = [`Plan ${done}/${total}`]
-  if (node !== null) parts.push(shorten(node.activeForm ?? node.title, STATUS_TITLE_MAX))
+  if (node !== null) {
+    const extra = activeLeaves(plan).length - 1
+    const first = shorten(node.activeForm ?? node.title, STATUS_TITLE_MAX)
+    parts.push(extra > 0 ? `${first} +${extra} more running` : first)
+  }
   if (label !== undefined) parts.push(label)
 
   return parts.join(' · ')

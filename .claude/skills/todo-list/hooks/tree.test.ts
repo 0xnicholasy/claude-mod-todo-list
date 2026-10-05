@@ -247,5 +247,73 @@ test('statusLine covers every activity phase', () => {
 
 test('no glyph is an emoji (Extended_Pictographic)', () => {
   for (const glyph of Object.values(GLYPHS)) expect(/\p{Extended_Pictographic}/u.test(glyph)).toBe(false)
-  expect(Object.values(GLYPHS).join('')).toBe('✓◉○■–├─└─│━─◂')
+  expect(Object.values(GLYPHS).join('')).toBe('✓◉○■–├─└─│━─◂∥')
+})
+
+const parallelPlan = planOf(
+  node('1', 'completed'),
+  node('2', 'in_progress', { parallel: true }),
+  node('2.1', 'in_progress'),
+  node('2.2', 'in_progress'),
+  node('2.3', 'pending'),
+  node('3', 'pending'),
+)
+
+test('a parallel parent gets a dim tag right after its title, before the right-aligned count', () => {
+  const row = find(buildTree(parallelPlan, idle, { maxLines: 20, width: 48 }), '2 T2')
+  const at = (needle: string): number => row.segments.findIndex(s => s.text.includes(needle))
+  expect(segOf(row, '∥ parallel')).toMatchObject({ text: ' ∥ parallel', dim: true })
+  expect(at('∥ parallel')).toBe(at('T2') + 1)
+  expect(row.text).toHaveLength(48)
+  expect(row.segments[row.segments.length - 1]).toMatchObject({ text: '0/3', dim: true })
+  const plain = find(buildTree(twoLevel, idle, { maxLines: 20 }), '2 T2')
+  expect(plain.text).not.toContain('∥')
+})
+
+test('two running leaves in a parallel group both get the accent and bold, and only the first gets the marker', () => {
+  const lines = buildTree(parallelPlan, idle, { maxLines: 20, accent: 'magenta' })
+  const first = find(lines, '2.1 T2.1')
+  const second = find(lines, '2.2 T2.2')
+  for (const row of [first, second]) {
+    expect(segOf(row, '◉')).toMatchObject({ color: 'magenta' })
+    expect(segOf(row, row === first ? 'T2.1' : 'T2.2')).toMatchObject({ color: 'magenta', bold: true })
+  }
+  expect(first.text).toContain('◂')
+  expect(second.text).not.toContain('◂')
+  expect(lines.filter(l => l.text.includes('◂'))).toHaveLength(1)
+})
+
+test('truncation keeps the paths to every running leaf', () => {
+  const big = planOf(
+    node('1', 'pending'),
+    node('2', 'pending'),
+    node('3', 'in_progress', { parallel: true }),
+    node('3.1', 'in_progress'),
+    node('3.2', 'pending'),
+    node('3.3', 'in_progress'),
+    node('4', 'pending'),
+    node('5', 'pending'),
+  )
+  const lines = buildTree(big, idle, { maxLines: 7 })
+  const shown = texts(lines)
+  expect(shown.some(t => t.includes('3.1 T3.1'))).toBe(true)
+  expect(shown.some(t => t.includes('3.3 T3.3'))).toBe(true)
+  expect(shown.some(t => t.includes('3 T3'))).toBe(true)
+  expect(shown[shown.length - 1]).toMatch(/^\+\d+ more$/)
+})
+
+test('statusLine names the first running leaf and counts the others', () => {
+  expect(statusLine(parallelPlan, idle)).toBe('Plan 1/5 · T2.1 +1 more running')
+  const long = planOf(
+    node('1', 'in_progress', { parallel: true, title: 'g' }),
+    node('1.1', 'in_progress', { activeForm: 'x'.repeat(50) }),
+    node('1.2', 'in_progress'),
+    node('1.3', 'in_progress'),
+  )
+  expect(statusLine(long, { ...idle, phase: 'working' })).toBe(`Plan 0/3 · ${'x'.repeat(29)}… +2 more running · Working`)
+})
+
+test('the parallel glyph passes the no-emoji test and is U+2225', () => {
+  expect(GLYPHS.parallel).toBe('∥')
+  expect(/\p{Extended_Pictographic}/u.test(GLYPHS.parallel)).toBe(false)
 })
