@@ -48,7 +48,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - verify: `claude --plugin-dir .claude/skills/todo-list --debug` on the spike branch following the Q1-Q10 script in plan.md; then on feat/plan-tree `git diff --stat main` shows only docs/plan-tree/*; `npm run check`
 
 ### T02 Add the plan data model, reducers and new atoms
-- status: done (#PR, 2026-10-05)
+- status: done (#4, 2026-10-05)
 - needs: T01
 - size: M
 - scope: Add new atoms inline in types/index.d.ts next to the old ones (old atoms stay until T11): `plan` { title; nodes: Array<{ id, parentId: string | null, title, activeForm?, status, note?, source: 'plan' | 'todo' | 'task', externalId?, updatedAt }> }, `task` { open, planned, denies }, `activity` { phase, tool?, detail?, subagents: string[], since }, `enforceSession` boolean, `planTool` { name: string | null; offered: boolean }; export matching named types. Add `hooks/sanitize.ts` holding `clean()` with its test ported. Add `hooks/plan.ts` with pure ops `setPlan`, `addNodes`, `updateNodes`, `removeNode`, `rollup`, `progress` (counts leaves), `currentNode`, `hasUnfinished`, enforcing depth 3, 60 nodes, title 120 chars, note 200 chars. Every op returns `{ plan } | { error }` and never throws.
@@ -172,4 +172,4 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 ## Log
 2026-10-05 T01 #2 spike answered Q1-Q10 (10 observed, 0 unobserved; sub-points unobserved listed in spike.md)
 2026-10-05 amend spike corrections applied to D7, D10, T03, T05-T10, T13 (owner approved)
-2026-10-05 T02 #PR plan model, reducers and new atoms
+2026-10-05 T02 #4 plan model, reducers and new atoms
