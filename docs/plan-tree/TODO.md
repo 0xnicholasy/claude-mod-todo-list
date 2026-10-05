@@ -102,7 +102,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - verify: `npm run check`; live: `claude --plugin-dir .claude/skills/todo-list`, ask for a 3-step change, confirm the pane draws the tree
 
 ### T08 Mirror TodoWrite, TaskCreate and TaskUpdate into the plan
-- status: done (#PR, 2026-10-05)
+- status: done (#10, 2026-10-05)
 - needs: T07
 - size: S
 - scope: TaskCreate/TaskUpdate only; TodoWrite does not exist in 2.1.289, so keep its mapping only if it is cheap and tested with a synthetic event. Add `hooks/ingest.ts` with pure mappings: TodoWrite replaces the `source: 'todo'` top-level leaves; TaskCreate adds a top-level node with `source: 'task'` and `externalId` = task id; TaskUpdate finds a node by externalId, patches it, removes it on `deleted`. Wire in register.tsx after a successful `next(e)` (no deny, no isError, `result.success`), main loop only. Each successful call marks the task planned.
@@ -181,4 +181,4 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 2026-10-05 T06 #8 gate decision, task lifecycle and prompt texts
 2026-10-05 T03 #7 plan tool schema, parser and model-facing text
 2026-10-05 T07 #9 plan tool, tree pane and status line live (3-level schema confirmed)
-2026-10-05 T08 #PR TaskCreate/TaskUpdate (and synthetic TodoWrite) mirrored into the tree
+2026-10-05 T08 #10 TaskCreate/TaskUpdate (and synthetic TodoWrite) mirrored into the tree
