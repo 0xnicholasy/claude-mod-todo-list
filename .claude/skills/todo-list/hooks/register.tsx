@@ -1,7 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { Plan, PlanToolState, TaskState } from '../types'
-import { emptyActivity } from './activity'
+import { emptyActivity, reduceActivity } from './activity'
+import type { ActivityEvent } from './activity'
 import { INSTRUCTION_ID, INSTRUCTION_TEXT, onNewPrompt, onPlanTouched, planContext } from './gate'
 import { ingestTaskCreate, ingestTaskUpdate, ingestTodoWrite } from './ingest'
 import { emptyPlan } from './plan'
@@ -16,6 +17,7 @@ import {
   PLAN_TOOL_SHORT_NAME,
   touchesPlan,
 } from './plan-tool'
+import { clean } from './sanitize'
 import { buildTree, statusLine } from './tree'
 
 // D4: the registered name is `mcp__<plugin>__<name>`, confirmed by the T01 spike (Q1).
@@ -23,6 +25,9 @@ const PLAN_TOOL_FULL_NAME = `mcp__todo-list__${PLAN_TOOL_SHORT_NAME}`
 const PANE = 'todo'
 const PANE_ROWS = 20
 const PANE_COLUMNS = 48
+// The host drops $.ui.log text over 4096 characters (T01 extra findings).
+const LOG_LIMIT = 4000
+const ASK_TOOL = 'AskUserQuestion'
 const USAGE = 'Usage: /todo (opens the pane) | /todo clear'
 const NOT_OWNER_TEXT =
   'Error: the plan is owned by the main session. Subagents cannot change it; report your progress in your result instead.'
@@ -64,6 +69,18 @@ function isPlanTool(tool: string, stored: string | null): boolean {
 async function refreshStatus($: EngineInterface): Promise<void> {
   const [p, a] = await Promise.all([read($, plan), read($, activity)])
   $.ui.status(statusLine(p, a))
+}
+
+// Feeds one event to the activity reducer and redraws the status line. Top-level function
+// declaration because `$` is passed to it (plugin validate rule).
+async function applyActivity($: EngineInterface, event: ActivityEvent): Promise<void> {
+  const now = await $.clock.now()
+  await update($, activity, cur => reduceActivity(cur, event, now))
+  await refreshStatus($)
+}
+
+function debugLog($: EngineInterface, text: string): void {
+  $.ui.log(text.slice(0, LOG_LIMIT), { to: 'debug' })
 }
 
 async function openPane($: EngineInterface): Promise<void> {
@@ -169,15 +186,117 @@ export const register: Register = on => {
     return { ...e, isDeferred: false }
   })
 
+  // Session activity (T09). Observe-only hooks: each records an event and returns what `next`
+  // returns, unchanged; a guard failure never blocks or alters the call. The tool.call part of
+  // it lives in the single catch-all tool.call hook below.
+  on('tool.check', async ($, e, next) => {
+    const verdict = await next(e)
+    await guard($, 'tool.check activity', undefined, async () => {
+      if (verdict.decision === 'ask' && e.tool_use_id !== undefined) {
+        await applyActivity($, { type: 'permissionAsk', tool: e.tool })
+      }
+    })
+
+    return verdict
+  })
+
+  // Second permission signal. Recorded before next: the chain may wait on the dialog itself.
+  // Repeating permissionAsk is idempotent in the reducer.
+  on('classic.PermissionRequest', async ($, e, next) => {
+    await guard($, 'PermissionRequest', undefined, () => applyActivity($, { type: 'permissionAsk', tool: e.tool_name }))
+
+    return next(e)
+  })
+
+  on('classic.SubagentStart', async ($, e, next) => {
+    await guard($, 'SubagentStart', undefined, () => applyActivity($, { type: 'subagentStart', id: e.agent_id }))
+
+    return next(e)
+  })
+
+  on('classic.SubagentStop', async ($, e, next) => {
+    await guard($, 'SubagentStop', undefined, () => applyActivity($, { type: 'subagentStop', id: e.agent_id }))
+
+    return next(e)
+  })
+
+  on('classic.StopFailure', async ($, e, next) => {
+    await guard($, 'StopFailure', undefined, () =>
+      applyActivity($, { type: 'stopFailure', detail: e.error_details ?? e.error }),
+    )
+
+    return next(e)
+  })
+
+  // Only the notification type is logged for now (spike: only permission_prompt observed).
+  on('classic.Notification', async ($, e, next) => {
+    await guard($, 'Notification', undefined, () => {
+      debugLog($, `todo-list: notification ${clean(e.notification_type)}`)
+    })
+
+    return next(e)
+  })
+
+  on('session.compact', async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    await guard($, 'compact start', undefined, () => applyActivity($, { type: 'compactStart' }))
+    try {
+      return await next(e)
+    } finally {
+      await guard($, 'compact end', undefined, () => applyActivity($, { type: 'compactEnd' }))
+    }
+  })
+
+  // The subagent's turn.complete carries agentId; the reducer ignores it (T01 Q7).
+  on('turn.complete', async ($, e, next) => {
+    await guard($, 'turn.complete', undefined, () =>
+      applyActivity($, { type: 'turnComplete', reason: e.reason, agentId: e.agentId }),
+    )
+
+    return next(e)
+  })
+
+  on('session.end', async ($, e, next) => {
+    if (e.reason === 'clear') {
+      await guard($, 'session.end', undefined, () => applyActivity($, { type: 'sessionClear' }))
+    }
+
+    return next(e)
+  })
+
   // No tool.check hook for the plan tool: the tool.call hook answers before any check (Q4).
   // The catch-all form is used because the registered name is known only after session.start.
+  //
+  // One catch-all tool.call hook only: the host refuses two without a matcher. It does two jobs
+  // in this order. (1) The plan tool and subagent calls: the plan tool is answered right here
+  // and never reaches the activity code, so the activity wrapper cannot swallow its answer;
+  // a subagent call goes straight to next(e). (2) Every other main-loop call is wrapped in
+  // activity start/end around next(e) and its result is returned untouched. This hook is
+  // registered BEFORE the matcher hooks for TaskCreate/TaskUpdate/TodoWrite below (first
+  // registered is outermost), so those mirrors run inside next(e), still see the real result,
+  // and their results pass back out through this wrapper unchanged.
   on('tool.call', async ($, e, next) => {
-    const stored = await guard($, 'tool.call', null as string | null, async () => (await read($, planTool)).name)
-    if (!isPlanTool(e.tool, stored)) return next(e)
+    const kind = await guard($, 'tool.call', 'skip' as 'skip' | 'plan' | 'tool' | 'question', async () => {
+      const stored = (await read($, planTool)).name
+      if (isPlanTool(e.tool, stored)) return 'plan'
+      if (e.agentId !== undefined) return 'skip'
 
-    return guard($, 'plan tool', { result: 'Error: the plan tool failed. Try again.' }, () =>
-      answerPlanCall($, e, e.agentId),
-    )
+      return e.tool === ASK_TOOL ? 'question' : 'tool'
+    })
+    if (kind === 'skip') return next(e)
+    if (kind === 'plan') {
+      return guard($, 'plan tool', { result: 'Error: the plan tool failed. Try again.' }, () =>
+        answerPlanCall($, e, e.agentId),
+      )
+    }
+    const open: ActivityEvent = kind === 'question' ? { type: 'questionOpen' } : { type: 'toolStart', tool: e.tool }
+    const close: ActivityEvent = kind === 'question' ? { type: 'questionClose' } : { type: 'toolEnd' }
+    await guard($, 'tool start', undefined, () => applyActivity($, open))
+    try {
+      return await next(e)
+    } finally {
+      await guard($, 'tool end', undefined, () => applyActivity($, close))
+    }
   })
 
   // D10: mirror TaskCreate, TaskUpdate and TodoWrite into the tree. Main loop only; each hook
@@ -258,6 +377,7 @@ export const register: Register = on => {
       const current = await read($, plan)
       await update($, task, t => onNewPrompt(t, current, e.text))
     })
+    await guard($, 'turn.start activity', undefined, () => applyActivity($, { type: 'turnStart' }))
 
     return next(e)
   })

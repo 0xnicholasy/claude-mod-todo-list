@@ -158,7 +158,8 @@ test('a successful TaskCreate and TaskUpdate fill and patch the tree', async ($,
   stubTasks(on)
   const out = await $.tool.call(CREATE)
   expect(out.result).toEqual({ task: { id: '5', subject: 'Write docs' } })
-  expect(statuses).toEqual(['Plan 0/1 · Writing docs'])
+  // T09: the call itself now shows as Running, then the mirrored plan, then back to Working.
+  expect(statuses).toEqual(['Running TaskCreate', 'Plan 0/1 · Writing docs · Running TaskCreate', 'Plan 0/1 · Writing docs · Working'])
   expect(String((await $.tool.call(SHOW)).result)).toContain('1 [pending] Write docs')
   await $.tool.call(START)
   expect(String((await $.tool.call(SHOW)).result)).toContain('1 [in_progress] Write docs')
@@ -188,7 +189,9 @@ test('denied, errored and subagent task calls change nothing', async ($, on) => 
   await $.tool.call({ ...CREATE, subject: 'errored' })
   const sub: Parameters<typeof $.tool.call>[0] & { agentId: string } = { ...CREATE, agentId: 'sub-1' }
   await $.tool.call(sub)
-  expect(statuses).toEqual([])
+  // T09: the denied and errored main-loop calls show Running then Working; no plan status appears.
+  expect(statuses.filter(s => s?.includes('Plan'))).toEqual([])
+  expect(statuses).toEqual(['Running TaskCreate', 'Working', 'Running TaskCreate', 'Working'])
   expect(String((await $.tool.call(SHOW)).result)).toContain('No plan yet')
 })
 
@@ -200,7 +203,8 @@ test('a TaskUpdate that did not succeed changes nothing', async ($, on) => {
   statuses.length = 0
   update.success = false
   await $.tool.call(START)
-  expect(statuses).toEqual([])
+  // T09: only the activity part of the line changes; the plan part stays as it was.
+  expect(statuses).toEqual(['Plan 0/1 · Writing docs · Running TaskUpdate', 'Plan 0/1 · Writing docs · Working'])
   expect(String((await $.tool.call(SHOW)).result)).toContain('1 [pending] Write docs')
 })
 
@@ -213,6 +217,224 @@ test('a synthetic TodoWrite event fills the tree with todo nodes', async ($, on)
   // The synthetic event: the real tool is absent in 2.1.289 (T01 Q6), so the stub plays it.
   on('tool.call', { tool: 'TodoWrite' }, async () => ({ result: { oldTodos: [], newTodos: todos } }))
   await $.tool.call({ tool: 'TodoWrite', todos })
-  expect(statuses).toEqual(['Plan 0/2 · Doing A'])
+  expect(statuses).toEqual(['Running TodoWrite', 'Plan 0/2 · Doing A · Running TodoWrite', 'Plan 0/2 · Doing A · Working'])
   expect(String((await $.tool.call(SHOW)).result)).toContain('2 [pending] B')
+})
+
+// Session activity (T09). Nothing answers beneath the mod under `claude plugin test`
+// (T01 Q9), so each test installs the stub the event needs.
+// No timers in the test types (types: []), so yield microtasks until the pending hooks parked.
+const settle = async (): Promise<void> => {
+  for (let i = 0; i < 200; i += 1) await Promise.resolve()
+}
+// setup() plus the turn.start answer that nothing beneath the mod gives.
+const activitySetup = (on: On): ReturnType<typeof setup> => {
+  on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
+
+  return setup(on)
+}
+const BASH = { tool: 'Bash', command: 'ls' } as const
+const stubBash = (on: On): void => {
+  on('tool.call', { tool: 'Bash' }, async () => ({ result: 'ok' }))
+}
+// A stub whose `next` stays pending until release() is called.
+const pending = (): { wait: Promise<void>; release: () => void } => {
+  let release: () => void = () => undefined
+  const wait = new Promise<void>(resolve => {
+    release = resolve
+  })
+
+  return { wait, release }
+}
+
+test('running a tool shows Running <tool>, and finishing it falls back to Working', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  const gate = pending()
+  on('tool.call', { tool: 'Bash' }, async () => {
+    await gate.wait
+
+    return { result: 'ok' }
+  })
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  expect(statuses.at(-1)).toBe('Working')
+  const call = $.tool.call(BASH)
+  await settle()
+  expect(statuses.at(-1)).toBe('Running Bash')
+  gate.release()
+  await call
+  expect(statuses.at(-1)).toBe('Working')
+})
+
+test('a tool that errors still ends the running state', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  on('tool.call', { tool: 'Bash' }, async () => {
+    throw new Error('boom')
+  })
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.tool.call(BASH).catch(() => undefined)
+  expect(statuses.at(-1)).toBe('Working')
+})
+
+test('tool.check ask shows Waiting for permission, and PermissionRequest repeats it harmlessly', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  on('tool.check', async () => ({ decision: 'ask' as const }))
+  on('classic.PermissionRequest', async () => ({}))
+  // A query carries no tool_use_id and changes nothing.
+  await $.tool.check({ tool: 'Bash', input: { command: 'ls' } })
+  expect(statuses).toEqual([])
+  await $.tool.check({ tool: 'Bash', input: { command: 'ls' }, tool_use_id: 'tu1' })
+  expect(statuses.at(-1)).toBe('Waiting for permission: Bash')
+  const before = statuses.length
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
+  expect(statuses.at(-1)).toBe('Waiting for permission: Bash')
+  expect(statuses.length).toBe(before + 1)
+})
+
+test('an allowed tool.check changes nothing', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  on('tool.check', async () => ({ decision: 'allow' as const }))
+  await $.tool.check({ tool: 'Read', input: {}, tool_use_id: 'tu1' })
+  expect(statuses).toEqual([])
+})
+
+test('AskUserQuestion shows Waiting for your answer while next is pending', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  const gate = pending()
+  on('tool.call', { tool: 'AskUserQuestion' }, async () => {
+    await gate.wait
+
+    return { result: 'answered' }
+  })
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  const call = $.tool.call({ tool: 'AskUserQuestion', questions: [] })
+  await settle()
+  expect(statuses.at(-1)).toBe('Waiting for your answer')
+  gate.release()
+  await call
+  expect(statuses.at(-1)).toBe('Working')
+})
+
+test('the plan tool never shows as Running and its answer passes through', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  const out = await $.tool.call(SET)
+  expect(out.result).toContain('Plan: Add README section')
+  expect(statuses).toEqual(['Plan 0/3 · Outline'])
+})
+
+test('a mirrored TaskCreate passes through the activity wrapper and ends Running', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  stubTasks(on)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  const out = await $.tool.call(CREATE)
+  expect(out.result).toEqual({ task: { id: '5', subject: 'Write docs' } })
+  expect(statuses.at(-1)).toBe('Plan 0/1 · Writing docs · Working')
+})
+
+test('a subagent tool call does not show as Running', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  stubBash(on)
+  const sub: Parameters<typeof $.tool.call>[0] & { agentId: string } = { ...BASH, agentId: 'sub-1' }
+  await $.tool.call(sub)
+  expect(statuses).toEqual([])
+})
+
+test('compacting shows Compacting while next is pending, then resumes', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  const gate = pending()
+  on('session.compact', async () => {
+    await gate.wait
+
+    return { skip: 'test' }
+  })
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  // next() refuses an empty transcript, so the call carries one message.
+  const run = $.session.compact({ trigger: 'manual', messages: [{ role: 'user', text: 'hello', toolUses: [] }] })
+  await settle()
+  expect(statuses.at(-1)).toBe('Compacting')
+  gate.release()
+  await run
+  expect(statuses.at(-1)).toBe('Working')
+})
+
+test('subagent start and stop count running subagents, by id', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  on('classic.SubagentStart', async () => ({}))
+  on('classic.SubagentStop', async () => ({}))
+  const start = (id: string) => $.classic.SubagentStart({ agent_id: id, agent_type: 'general-purpose' })
+  const stop = (id: string) =>
+    $.classic.SubagentStop({
+      agent_id: id,
+      agent_type: 'general-purpose',
+      agent_transcript_path: '',
+      stop_hook_active: false,
+    })
+  await start('a1')
+  expect(statuses.at(-1)).toBe('Idle · 1 subagent')
+  await start('a1')
+  await start('a2')
+  expect(statuses.at(-1)).toBe('Idle · 2 subagents')
+  await stop('unrelated')
+  expect(statuses.at(-1)).toBe('Idle · 2 subagents')
+  await stop('a1')
+  await stop('a2')
+  expect(statuses.at(-1)).toBeUndefined()
+})
+
+test('turn.complete shows Interrupted and Error, and answer returns to idle', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  on('turn.complete', async (_$, e) => ({ text: e.answer }))
+  const done = (reason: 'answer' | 'aborted' | 'error') =>
+    $.turn.complete({ answer: '', durationMs: 1, isAborted: reason === 'aborted', turnId: 't1', reason })
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await done('aborted')
+  expect(statuses.at(-1)).toBe('Interrupted')
+  await $.turn.start({ text: 'again', turnId: 't2' })
+  await done('error')
+  expect(statuses.at(-1)).toBe('Error')
+  await $.turn.start({ text: 'again', turnId: 't3' })
+  await done('answer')
+  expect(statuses.at(-1)).toBeUndefined()
+})
+
+test('StopFailure shows Error with the detail', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  on('classic.StopFailure', async () => ({}))
+  await $.classic.StopFailure({ error: 'rate_limit' })
+  expect(statuses.at(-1)).toBe('Error: rate_limit')
+})
+
+test('a subagent turn.complete leaves the status unchanged', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  on('turn.complete', async (_$, e) => ({ text: e.answer }))
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  const before = statuses.at(-1)
+  await $.turn.complete({
+    answer: '',
+    durationMs: 1,
+    isAborted: true,
+    turnId: 't1',
+    reason: 'aborted',
+    agentId: 'sub-1',
+  })
+  expect(statuses.at(-1)).toBe(before)
+  expect(before).toBe('Working')
+})
+
+test('session.end with reason clear resets the activity; other reasons do not', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  on('session.end', async (_$, e) => ({ sessionId: e.sessionId }))
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  const end = (reason: 'clear' | 'other') =>
+    $.session.end({ reason, sessionId: 's1', resume: { id: 's1' } } as Parameters<typeof $.session.end>[0])
+  await end('other')
+  expect(statuses.at(-1)).toBe('Working')
+  await end('clear')
+  expect(statuses.at(-1)).toBeUndefined()
+})
+
+test('Notification is logged by type only, and the call result is unchanged', async ($, on) => {
+  const { logs } = activitySetup(on)
+  on('classic.Notification', async () => ({}))
+  await $.classic.Notification({ message: 'secret text', notification_type: 'permission_prompt' })
+  expect(logs).toEqual(['todo-list: notification permission_prompt'])
 })

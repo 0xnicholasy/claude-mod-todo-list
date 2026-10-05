@@ -1,6 +1,7 @@
 // Pure plan-tree rendering: pane lines and the status-line text. No `$` here: register.tsx
 // reads the atoms and passes plain data in, then draws each TreeLine with <Text>.
-import type { ActivityState, ActivityPhase, Plan, PlanNode, PlanStatus } from '../types'
+import type { ActivityState, Plan, PlanNode, PlanStatus } from '../types'
+import { activityLabel } from './activity'
 import { currentNode, progress } from './plan'
 
 // Box-drawing and geometric glyphs only; tree.test.ts asserts none is Extended_Pictographic.
@@ -31,31 +32,6 @@ export type TreeLine = {
 }
 
 const plain = (text: string): TreeLine => ({ text, bold: false, dim: false, inverse: false })
-
-const pluralSubagents = (n: number): string => `${n} subagent${n === 1 ? '' : 's'}`
-
-// Text for an activity phase. Local stand-in: T05's `activityLabel` replaces it in T07.
-const phaseLabel = (activity: ActivityState): string => {
-  const phase: ActivityPhase = activity.phase
-  switch (phase) {
-    case 'idle':
-      return 'Idle'
-    case 'working':
-      return 'Working'
-    case 'tool':
-      return activity.tool === undefined ? 'Running tool' : `Running ${activity.tool}`
-    case 'permission':
-      return activity.tool === undefined ? 'Waiting for permission' : `Waiting for permission: ${activity.tool}`
-    case 'question':
-      return 'Waiting for your answer'
-    case 'compacting':
-      return 'Compacting'
-    case 'interrupted':
-      return 'Interrupted'
-    case 'error':
-      return activity.detail === undefined || activity.detail === '' ? 'Error' : `Error: ${activity.detail}`
-  }
-}
 
 const bar = (done: number, total: number): string => {
   const filled = total === 0 ? 0 : Math.round((done / total) * BAR_CELLS)
@@ -135,8 +111,7 @@ const rowsFor = (plan: Plan, parentId: string | null, prefix: string, currentId:
 }
 
 const activityLine = (activity: ActivityState): TreeLine => {
-  const subs = activity.subagents.length > 0 ? ` · ${pluralSubagents(activity.subagents.length)}` : ''
-  const text = `${activity.phase === 'idle' ? GLYPHS.pending : GLYPHS.in_progress} ${phaseLabel(activity)}${subs}`
+  const text = `${activity.phase === 'idle' ? GLYPHS.pending : GLYPHS.in_progress} ${activityLabel(activity) ?? 'Idle'}`
   switch (activity.phase) {
     case 'idle':
       return { ...plain(text), dim: true }
@@ -191,7 +166,7 @@ export const buildTree = (plan: Plan, activity: ActivityState, opts: { maxLines:
 // Status-line text, e.g. `Plan 3/7 · Escaping quotes · Waiting for permission: Bash`.
 // Undefined with no plan and an idle session.
 export const statusLine = (plan: Plan, activity: ActivityState): string | undefined => {
-  const label = activity.phase === 'idle' ? undefined : phaseLabel(activity)
+  const label = activityLabel(activity)
   if (plan.nodes.length === 0) return label
   const { done, total } = progress(plan)
   const node = highlighted(plan)
