@@ -1,0 +1,4 @@
+node_modules/
+.claude/worktrees/
+.claude/skills/todo-list/.claude-plugin/types/
+*.log

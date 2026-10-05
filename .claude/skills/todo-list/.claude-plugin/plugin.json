@@ -1,0 +1,6 @@
+{
+  "name": "todo-list",
+  "version": "0.1.0",
+  "description": "A todo pane, status line and gentle nudges that follow Claude's task list.",
+  "types": "./types/index.d.ts"
+}

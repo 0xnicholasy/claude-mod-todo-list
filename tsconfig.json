@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2023"],
+    "types": [],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noImplicitAny": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "jsx": "react",
+    "jsxFactory": "h",
+    "jsxFragmentFactory": "Fragment"
+  },
+  "include": [
+    "vendor/claude-code/claude-code.d.ts",
+    ".claude/skills/todo-list/hooks/**/*",
+    ".claude/skills/todo-list/types/**/*",
+    ".claude/skills/todo-list/**/*.test.ts"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "claude-mod-todo-list",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "validate": "claude plugin validate .claude/skills/todo-list",
+    "test": "claude plugin test .claude/skills/todo-list",
+    "check": "npm run validate && npm run typecheck && npm run test"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
