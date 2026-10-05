@@ -1,6 +1,7 @@
 // Pure todo logic: the list reducers, progress math, pane lines and the nudge decision.
 // No `$` here: register.tsx reads and writes the atoms and passes plain data in.
 import type { TodoItem, TodoStatus } from '../types'
+import { clean } from './sanitize'
 
 export type { TodoItem, TodoStatus }
 
@@ -12,16 +13,6 @@ export type TaskUpdateInput = {
   activeForm?: string
   status?: TodoStatus | 'deleted'
 }
-
-// Subjects and forms come from the model: a control character would reach the terminal
-// (escape injection), so each becomes a space.
-// Control characters become spaces; bidi and zero-width characters are dropped.
-export const clean = (s: string): string =>
-  s
-    .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
-    .replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
 
 // TodoWrite replaces the whole list. An entry whose content and status are unchanged
 // keeps its updatedAt; ids are positional.
