@@ -142,3 +142,77 @@ test('/todo with no args opens the pane', async ($, on) => {
   expect(out.text).toBe('Plan pane opened.')
   expect(opened).toEqual(['todo'])
 })
+
+// The tool beneath the mod: the stub stands in for the real tool and supplies the result.
+const stubTasks = (on: On, update: { success: boolean } = { success: true }): void => {
+  on('tool.call', { tool: 'TaskCreate' }, async () => ({ result: { task: { id: '5', subject: 'Write docs' } } }))
+  on('tool.call', { tool: 'TaskUpdate' }, async () => ({
+    result: { success: update.success, taskId: '5', updatedFields: ['status'] },
+  }))
+}
+const CREATE = { tool: 'TaskCreate', subject: 'Write docs', description: 'd', activeForm: 'Writing docs' } as const
+const START = { tool: 'TaskUpdate', taskId: '5', status: 'in_progress' } as const
+
+test('a successful TaskCreate and TaskUpdate fill and patch the tree', async ($, on) => {
+  const { statuses, logs } = setup(on)
+  stubTasks(on)
+  const out = await $.tool.call(CREATE)
+  expect(out.result).toEqual({ task: { id: '5', subject: 'Write docs' } })
+  expect(statuses).toEqual(['Plan 0/1 · Writing docs'])
+  expect(String((await $.tool.call(SHOW)).result)).toContain('1 [pending] Write docs')
+  await $.tool.call(START)
+  expect(String((await $.tool.call(SHOW)).result)).toContain('1 [in_progress] Write docs')
+  await $.tool.call({ tool: 'TaskUpdate', taskId: '5', status: 'deleted' })
+  expect(String((await $.tool.call(SHOW)).result)).toContain('No plan yet')
+  expect(logs).toEqual([])
+})
+
+test('task nodes survive a later plan set', async ($, on) => {
+  setup(on)
+  stubTasks(on)
+  await $.tool.call(CREATE)
+  const out = await $.tool.call(SET)
+  expect(String(out.result)).toContain('Write docs')
+  expect(String(out.result)).toContain('Draft')
+})
+
+test('denied, errored and subagent task calls change nothing', async ($, on) => {
+  const { statuses } = setup(on)
+  on('tool.call', { tool: 'TaskCreate' }, async (_$, e) => {
+    if (e.subject === 'denied') return { deny: 'no' }
+    const result = { task: { id: '5', subject: e.subject } }
+
+    return e.subject === 'errored' ? { result, isError: true as const } : { result }
+  })
+  await $.tool.call({ ...CREATE, subject: 'denied' })
+  await $.tool.call({ ...CREATE, subject: 'errored' })
+  const sub: Parameters<typeof $.tool.call>[0] & { agentId: string } = { ...CREATE, agentId: 'sub-1' }
+  await $.tool.call(sub)
+  expect(statuses).toEqual([])
+  expect(String((await $.tool.call(SHOW)).result)).toContain('No plan yet')
+})
+
+test('a TaskUpdate that did not succeed changes nothing', async ($, on) => {
+  const { statuses } = setup(on)
+  const update = { success: true }
+  stubTasks(on, update)
+  await $.tool.call(CREATE)
+  statuses.length = 0
+  update.success = false
+  await $.tool.call(START)
+  expect(statuses).toEqual([])
+  expect(String((await $.tool.call(SHOW)).result)).toContain('1 [pending] Write docs')
+})
+
+test('a synthetic TodoWrite event fills the tree with todo nodes', async ($, on) => {
+  const { statuses } = setup(on)
+  const todos: Array<{ content: string; status: 'pending' | 'in_progress' | 'completed'; activeForm: string }> = [
+    { content: 'A', status: 'in_progress', activeForm: 'Doing A' },
+    { content: 'B', status: 'pending', activeForm: 'Doing B' },
+  ]
+  // The synthetic event: the real tool is absent in 2.1.289 (T01 Q6), so the stub plays it.
+  on('tool.call', { tool: 'TodoWrite' }, async () => ({ result: { oldTodos: [], newTodos: todos } }))
+  await $.tool.call({ tool: 'TodoWrite', todos })
+  expect(statuses).toEqual(['Plan 0/2 · Doing A'])
+  expect(String((await $.tool.call(SHOW)).result)).toContain('2 [pending] B')
+})

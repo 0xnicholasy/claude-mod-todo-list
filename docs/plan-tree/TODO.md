@@ -2,7 +2,7 @@
 
 ultraplan: plan-tree | branch: feat/plan-tree | base: main | tag: pre-plan-tree-main | created: 2026-10-05
 Status: ACTIVE
-Progress: 7/14 done
+Progress: 8/14 done
 
 ## Goal
 With the plugin loaded, every prompt that leads to tool use gets a plan tree that Claude writes through the plugin's own `mcp__todo-list__plan` tool. That tree is the only record of progress. A pane and status line draw it as a box-drawing tree with per-node status (Completed, In progress, Pending, Blocked, Skipped). They also show what Claude is doing now: working, running a tool, waiting for permission, waiting for your answer, compacting, interrupted, error, and how many subagents are running. State-changing tools are blocked until a plan exists. Enforcement fails open and the user can switch it off.
@@ -102,7 +102,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - verify: `npm run check`; live: `claude --plugin-dir .claude/skills/todo-list`, ask for a 3-step change, confirm the pane draws the tree
 
 ### T08 Mirror TodoWrite, TaskCreate and TaskUpdate into the plan
-- status: todo
+- status: done (#PR, 2026-10-05)
 - needs: T07
 - size: S
 - scope: TaskCreate/TaskUpdate only; TodoWrite does not exist in 2.1.289, so keep its mapping only if it is cheap and tested with a synthetic event. Add `hooks/ingest.ts` with pure mappings: TodoWrite replaces the `source: 'todo'` top-level leaves; TaskCreate adds a top-level node with `source: 'task'` and `externalId` = task id; TaskUpdate finds a node by externalId, patches it, removes it on `deleted`. Wire in register.tsx after a successful `next(e)` (no deny, no isError, `result.success`), main loop only. Each successful call marks the task planned.
@@ -181,3 +181,4 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 2026-10-05 T06 #8 gate decision, task lifecycle and prompt texts
 2026-10-05 T03 #7 plan tool schema, parser and model-facing text
 2026-10-05 T07 #9 plan tool, tree pane and status line live (3-level schema confirmed)
+2026-10-05 T08 #PR TaskCreate/TaskUpdate (and synthetic TodoWrite) mirrored into the tree

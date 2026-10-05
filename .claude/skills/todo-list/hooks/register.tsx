@@ -3,7 +3,9 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Plan, PlanToolState, TaskState } from '../types'
 import { emptyActivity } from './activity'
 import { INSTRUCTION_ID, INSTRUCTION_TEXT, onNewPrompt, onPlanTouched, planContext } from './gate'
+import { ingestTaskCreate, ingestTaskUpdate, ingestTodoWrite } from './ingest'
 import { emptyPlan } from './plan'
+import type { PlanResult } from './plan'
 import type { PlanApplied } from './plan-tool'
 import {
   applyPlanOp,
@@ -104,6 +106,30 @@ async function answerPlanCall($: EngineInterface, input: unknown, agentId: strin
   return { result: applied.text }
 }
 
+// Mirrors a successful TaskCreate/TaskUpdate/TodoWrite call into the plan (D10). The call has
+// already run; a rejected mapping (a limit, say) leaves the plan alone and is only logged.
+async function mirror($: EngineInterface, name: string, apply: (cur: Plan, now: number) => PlanResult): Promise<void> {
+  const now = await $.clock.now()
+  let failure: string | null = null
+  await update($, plan, (cur: Plan) => {
+    const out = apply(cur, now)
+    if ('error' in out) {
+      failure = out.error
+
+      return cur
+    }
+
+    return out.plan
+  })
+  if (failure !== null) {
+    $.ui.log(`todo-list: ${name} not mirrored: ${failure}`, { to: 'debug' })
+
+    return
+  }
+  await update($, task, onPlanTouched)
+  await refreshStatus($)
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await guard($, 'session.start', undefined, async () => {
@@ -152,6 +178,45 @@ export const register: Register = on => {
     return guard($, 'plan tool', { result: 'Error: the plan tool failed. Try again.' }, () =>
       answerPlanCall($, e, e.agentId),
     )
+  })
+
+  // D10: mirror TaskCreate, TaskUpdate and TodoWrite into the tree. Main loop only; each hook
+  // lets the call run first and applies it only after it succeeded. The result is never changed.
+  on('tool.call', { tool: 'TaskCreate' }, async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    const ran = await next(e)
+    if (ran.deny !== undefined || ran.isError === true) return ran
+    await guard($, 'TaskCreate', undefined, () =>
+      mirror($, 'TaskCreate', (cur, now) =>
+        ingestTaskCreate(cur, { id: ran.result.task.id, subject: e.subject, activeForm: e.activeForm }, now),
+      ),
+    )
+
+    return ran
+  })
+
+  on('tool.call', { tool: 'TaskUpdate' }, async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    const ran = await next(e)
+    if (ran.deny !== undefined || ran.isError === true || !ran.result.success) return ran
+    await guard($, 'TaskUpdate', undefined, () =>
+      mirror($, 'TaskUpdate', (cur, now) =>
+        ingestTaskUpdate(cur, { taskId: e.taskId, subject: e.subject, activeForm: e.activeForm, status: e.status }, now),
+      ),
+    )
+
+    return ran
+  })
+
+  on('tool.call', { tool: 'TodoWrite' }, async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    const ran = await next(e)
+    if (ran.deny !== undefined || ran.isError === true) return ran
+    await guard($, 'TodoWrite', undefined, () =>
+      mirror($, 'TodoWrite', (cur, now) => ingestTodoWrite(cur, ran.result.newTodos ?? e.todos, now)),
+    )
+
+    return ran
   })
 
   // The instruction is added only when the plan tool is in the request's tool list. The pin
