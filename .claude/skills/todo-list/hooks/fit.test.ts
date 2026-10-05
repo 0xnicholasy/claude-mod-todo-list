@@ -9,7 +9,7 @@ test('needsRefit is true with nothing recorded', () => {
 })
 
 test('needsRefit is true when the width, the height or the placement changes', () => {
-  expect(needsRefit(BASE, { ...BASE, columns: 46 })).toBe(true)
+  expect(needsRefit(BASE, { ...BASE, columns: 130 })).toBe(true)
   expect(needsRefit(BASE, { ...BASE, rows: 45 })).toBe(true)
   expect(needsRefit(BASE, { ...BASE, placement: 'dock' })).toBe(true)
 })
@@ -23,4 +23,12 @@ test('needsRefit ignores a small change in the rows the plan wants', () => {
 test('needsRefit is true when the plan wants 3 or more rows more or fewer', () => {
   expect(needsRefit(BASE, { ...BASE, wantRows: 15 })).toBe(true)
   expect(needsRefit(BASE, { ...BASE, wantRows: 9 })).toBe(true)
+})
+
+test('needsRefit never refits below 110 columns, whatever else changed', () => {
+  expect(needsRefit(null, { ...BASE, columns: 80 })).toBe(false)
+  expect(needsRefit(BASE, { ...BASE, columns: 109 })).toBe(false)
+  expect(needsRefit(BASE, { ...BASE, columns: 46, rows: 45 })).toBe(false)
+  expect(needsRefit(BASE, { ...BASE, columns: 80, wantRows: 30 })).toBe(false)
+  expect(needsRefit(BASE, { ...BASE, columns: 110 })).toBe(true)
 })
