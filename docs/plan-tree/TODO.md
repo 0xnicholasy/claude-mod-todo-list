@@ -75,7 +75,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - verify: `npm run check`
 
 ### T05 Build the activity reducer (Claude state from events)
-- status: done (#PR, 2026-10-05)
+- status: done (#5, 2026-10-05)
 - needs: T02
 - size: S
 - scope: Add `hooks/activity.ts`, pure `reduceActivity(prev, event, now)`. Events: turnStart, turnComplete(reason), toolStart(tool), toolEnd, permissionAsk(tool), questionOpen, questionClose, compactStart, compactEnd, subagentStart(id), subagentStop(id), stopFailure(detail). Phases: idle, working, tool, permission, question, compacting, interrupted, error. Precedence question > permission > compacting > tool > working. Subagent ids form a set (duplicate start counts once; unknown stop is a no-op). `activityLabel(activity)` returns the label table in plan.md. turnComplete events carrying an `agentId` are ignored, so only main-loop turn ends move to idle, interrupted or error. A user rejecting a dialog ends as reason `answer` (idle), not aborted. Add a `sessionClear` event that resets activity. Subagent ids stay a set, because Start/Stop events from unrelated background agents can arrive.
@@ -173,4 +173,4 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 2026-10-05 T01 #2 spike answered Q1-Q10 (10 observed, 0 unobserved; sub-points unobserved listed in spike.md)
 2026-10-05 amend spike corrections applied to D7, D10, T03, T05-T10, T13 (owner approved)
 2026-10-05 T02 #4 plan model, reducers and new atoms
-2026-10-05 T05 #PR activity reducer: Claude state from events
+2026-10-05 T05 #5 activity reducer: Claude state from events
