@@ -156,7 +156,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - verify: `claude --plugin-dir .claude/skills/todo-list`
 
 ### TZZ Cleanup and land
-- status: done (#PR, 2026-10-05)
+- status: done (#16, 2026-10-05)
 - needs: every other todo
 - scope: run `/implement cleanup`
 - done when: skill removed from the branch, TODO.md archived, landing PR into main open and approved by the owner
@@ -203,4 +203,4 @@ T13 step 8: pass - Esc during a long reply: status line "todo-list: Interrupted"
 T13 step 9: pass - 2-level plan "Demo": finished branches render "├─ ✓ 1 Phase A (2/2)" and "└─ ✓ 2 Phase B (2/2)", header "Demo 4/4 ██████████████ 100%", status "Plan 4/4"; 2-level render with ◉ ○ ├─ └─ glyphs and 14-cell bar seen at "Demo 2/4 ███████░░░░░░░ 50%"
 T13 step 10: pass - with a finished 3/3 plan, a follow-up "call Edit first" prompt got the toast "Blocked Edit: no plan yet." and Claude re-planned ("Append 'Sixth line.'")
 T13 step 11: unobservable - the background agent finished after the plan was done and the notification turn made no Edit call, so no deny was exercised; covered by gate.test.ts "empty text and task-notification prompts keep the task unchanged". No Blocked toast appeared.
-2026-10-05 TZZ #PR cleanup; landing PR into main opened
+2026-10-05 TZZ #16 cleanup; landing PR into main opened
