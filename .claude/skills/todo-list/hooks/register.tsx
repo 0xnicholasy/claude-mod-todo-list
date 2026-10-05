@@ -210,6 +210,13 @@ export const register: Register = (on, options) => {
           inputSchema: PLAN_INPUT_SCHEMA,
         })
         await update($, planTool, cur => ({ ...cur, name: registered.tool }))
+        // The describe answer is cached per session: after a hot reload it may have been computed
+        // before this module's pin existed, which leaves the tool deferred behind ToolSearch.
+        try {
+          $.ui.invalidate('tool.describe')
+        } catch (error) {
+          $.ui.log(`todo-list: tool.describe invalidate failed ${String(error)}`, { to: 'debug' })
+        }
       } catch (error) {
         // The name stays null: the gate and the instruction both fail open without the tool.
         $.ui.log(`todo-list: plan tool registration failed ${String(error)}`, { to: 'debug' })
