@@ -37,7 +37,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 ## Todos
 
 ### T01 Spike: prove plan-tool registration, call handling, deny and event signals live
-- status: done (#PR, 2026-10-05)
+- status: done (#2, 2026-10-05)
 - needs: none
 - size: M
 - scope: On a throwaway branch `spike/plan-tool` cut from feat/plan-tree, add a minimal second hooks module that registers `plan` in session.start, pins it with tool.describe `isDeferred: false`, allows it in tool.check, answers it from a tool.call hook, denies Edit, Bash and Agent from tool.call, and logs turn.start, turn.complete, tool.check (ask), classic.PermissionRequest, classic.Notification, classic.SubagentStart/Stop, classic.StopFailure, session.compact and session.end to the debug log. Answer Q1-Q10 (plan.md) in `docs/plan-tree/spike.md` with observed evidence. Only the doc merges; spike code never lands on feat/plan-tree.
@@ -167,4 +167,4 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - Persist the plan across `/clear` or resume via `$.store` if the owner wants that.
 
 ## Log
-2026-10-05 T01 #PR spike answered Q1-Q10 (10 observed, 0 unobserved; sub-points unobserved listed in spike.md)
+2026-10-05 T01 #2 spike answered Q1-Q10 (10 observed, 0 unobserved; sub-points unobserved listed in spike.md)
