@@ -84,7 +84,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - verify: `npm run check`
 
 ### T06 Build the gate decision, task lifecycle and prompt texts
-- status: done (#PR, 2026-10-05)
+- status: done (#8, 2026-10-05)
 - needs: T02
 - size: S
 - scope: Add `hooks/gate.ts`: `BLOCKED_TOOLS` (D6); `decideGate({ tool, agentId, isPlanTool, enforceConfig, enforceSession, toolRegistered, toolOffered, planned, denies })` returning `allow`, `deny(message)` or `pause(toast)` with `MAX_DENIES = 3`; `onNewPrompt(task, plan)` (D7; text prefixed `<task-notification>` is a continuation, not a new task) and `onPlanTouched(task)`; `INSTRUCTION_TEXT` (system-prompt section: plan before any tool use, keep statuses current, use blocked/skipped with a note, ask via AskUserQuestion when unclear); `planContext(plan, toolName)` for prompt.submit; `denyText(tool, toolName)` naming the full tool name and the `set` op, never mentioning `/todo off` (that goes only to the user toast). `denyText` must spell out the exact call, for example `mcp__todo-list__plan` with `{"op":"set","title":...,"nodes":[{"title":...}]}`, because the model retried a vague deny 3 times (T01 Q5).
@@ -175,4 +175,4 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 2026-10-05 T02 #4 plan model, reducers and new atoms
 2026-10-05 T05 #5 activity reducer: Claude state from events
 2026-10-05 T04 #6 tree renderer and status line
-2026-10-05 T06 #PR gate decision, task lifecycle and prompt texts
+2026-10-05 T06 #8 gate decision, task lifecycle and prompt texts
