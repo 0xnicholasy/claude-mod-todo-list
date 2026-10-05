@@ -2,7 +2,7 @@
 
 ultraplan: plan-tree | branch: feat/plan-tree | base: main | tag: pre-plan-tree-main | created: 2026-10-05
 Status: ACTIVE
-Progress: 10/14 done
+Progress: 11/14 done
 
 ## Goal
 With the plugin loaded, every prompt that leads to tool use gets a plan tree that Claude writes through the plugin's own `mcp__todo-list__plan` tool. That tree is the only record of progress. A pane and status line draw it as a box-drawing tree with per-node status (Completed, In progress, Pending, Blocked, Skipped). They also show what Claude is doing now: working, running a tool, waiting for permission, waiting for your answer, compacting, interrupted, error, and how many subagents are running. State-changing tools are blocked until a plan exists. Enforcement fails open and the user can switch it off.
@@ -129,7 +129,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - verify: `npm run check`
 
 ### T11 Delete the old todo-list code and atoms
-- status: todo
+- status: done (#PR, 2026-10-05)
 - needs: T10
 - size: S
 - scope: Delete the old modules and tests. Remove the `items`, `updatedThisTurn` and `nudgedThisTurn` atoms and the `TodoItem` and `TodoStatus` types from types/index.d.ts.
@@ -187,3 +187,4 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 2026-10-05 T08 #10 TaskCreate/TaskUpdate (and synthetic TodoWrite) mirrored into the tree
 2026-10-05 T09 #11 session activity events wired to the activity line
 2026-10-05 T10 #12 gate blocks edits until a plan exists; fails open; /todo off|on; userConfig.enforce
+2026-10-05 T11 #PR old todo-list modules, tests and atoms deleted
