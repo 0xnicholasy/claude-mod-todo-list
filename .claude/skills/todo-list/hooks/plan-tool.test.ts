@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { emptyPlan, setPlan } from './plan'
 import type { Plan } from './plan'
-import { applyPlanOp, formatForModel, parsePlanInput, PLAN_INPUT_SCHEMA, PLAN_TOOL_DESCRIPTION, PLAN_TOOL_SHORT_NAME } from './plan-tool'
+import { applyPlanOp, formatForModel, parsePlanInput, PLAN_INPUT_SCHEMA, PLAN_TOOL_DESCRIPTION, PLAN_TOOL_SHORT_NAME, touchesPlan } from './plan-tool'
 import type { PlanOp } from './plan-tool'
 
 const parsed = (raw: unknown): PlanOp => {
@@ -170,4 +170,12 @@ test('formatForModel keeps a long final line whole instead of slicing it', () =>
       for (const line of text.split('\n').slice(1)) expect(/^\d+ \[pending\] (x+|y{120})$|^\.\.\. \d+ more nodes not shown/.test(line)).toBe(true)
     }
   }
+})
+
+test('touchesPlan is false for show and true for every op that writes the plan', () => {
+  expect(touchesPlan(parsed({ op: 'show' }))).toBe(false)
+  expect(touchesPlan(parsed({ op: 'set', title: 'T', nodes: [{ title: 'A' }] }))).toBe(true)
+  expect(touchesPlan(parsed({ op: 'add', nodes: [{ title: 'A' }] }))).toBe(true)
+  expect(touchesPlan(parsed({ op: 'update', updates: [{ id: '1', status: 'completed' }] }))).toBe(true)
+  expect(touchesPlan(parsed({ op: 'remove', id: '1' }))).toBe(true)
 })

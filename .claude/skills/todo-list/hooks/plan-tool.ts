@@ -69,6 +69,10 @@ export type PlanOp =
   | { op: 'remove'; id: string }
   | { op: 'show' }
 
+// Only ops that write the plan count as planning for the gate (D2). `show` is read-only, so it
+// must not let the model bypass the gate on an empty plan.
+export const touchesPlan = (op: PlanOp): boolean => op.op !== 'show'
+
 export type ParsedPlanInput = { parsed: PlanOp } | { error: string }
 
 export type PlanApplied = { plan: Plan; text: string } | { error: string }
