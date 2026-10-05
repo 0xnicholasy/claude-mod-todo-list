@@ -3,7 +3,8 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Plan, PlanToolState, TaskState } from '../types'
 import { emptyActivity, reduceActivity } from './activity'
 import type { ActivityEvent } from './activity'
-import { INSTRUCTION_ID, INSTRUCTION_TEXT, onNewPrompt, onPlanTouched, planContext } from './gate'
+import type { GateDecision } from './gate'
+import { decideGate, INSTRUCTION_ID, INSTRUCTION_TEXT, MAX_DENIES, onNewPrompt, onPlanTouched, planContext } from './gate'
 import { ingestTaskCreate, ingestTaskUpdate, ingestTodoWrite } from './ingest'
 import { emptyPlan } from './plan'
 import type { PlanResult } from './plan'
@@ -28,7 +29,7 @@ const PANE_COLUMNS = 48
 // The host drops $.ui.log text over 4096 characters (T01 extra findings).
 const LOG_LIMIT = 4000
 const ASK_TOOL = 'AskUserQuestion'
-const USAGE = 'Usage: /todo (opens the pane) | /todo clear'
+const USAGE = 'Usage: /todo (opens the pane) | /todo clear | /todo off | /todo on'
 const NOT_OWNER_TEXT =
   'Error: the plan is owned by the main session. Subagents cannot change it; report your progress in your result instead.'
 
@@ -36,6 +37,9 @@ const EMPTY_TASK: TaskState = { open: false, planned: false, denies: 0 }
 const plan = atom({ plugin: 'todo-list', key: 'plan' } as const, emptyPlan())
 const task = atom({ plugin: 'todo-list', key: 'task' } as const, EMPTY_TASK)
 const activity = atom({ plugin: 'todo-list', key: 'activity' } as const, emptyActivity(0))
+// D8: the session half of the enforcement switch; `/todo on|off` flips it. The other half is the
+// plugin option `enforce`.
+const enforceSession = atom({ plugin: 'todo-list', key: 'enforceSession' } as const, true as boolean)
 const planTool = atom({ plugin: 'todo-list', key: 'planTool' } as const, {
   name: null,
   offered: false,
@@ -94,12 +98,58 @@ async function runTodoCommand($: EngineInterface, args: string): Promise<{ text:
 
     return { text: 'Plan pane opened.' }
   }
+  if (word === 'off' || word === 'on') {
+    await update($, enforceSession, () => word === 'on')
+
+    return { text: word === 'on' ? 'Plan enforcement is on.' : 'Plan enforcement is off for this session.' }
+  }
   if (word !== 'clear') return { text: USAGE }
   await update($, plan, () => emptyPlan())
   await update($, task, () => EMPTY_TASK)
   await refreshStatus($)
 
   return { text: 'Plan cleared.' }
+}
+
+// A toast failure must never change the deny/allow outcome of the gate.
+function safeToast($: EngineInterface, text: string): void {
+  try {
+    $.ui.toast(text)
+  } catch (error) {
+    try {
+      $.ui.log(`todo-list: toast threw ${String(error)}`, { to: 'debug' })
+    } catch {
+      // Logging must never throw out of a hook.
+    }
+  }
+}
+
+// The gate (D8). Runs for main-loop calls other than the plan tool, inside guard(): any throw,
+// including one from the state, allows the call; a toast failure is caught and does not. `denies` counts blocked calls in this turn
+// (turn.start resets it); after MAX_DENIES the gate pauses, and the pause toast shows once
+// because the pausing call moves `denies` past MAX_DENIES.
+async function runGate($: EngineInterface, tool: string, enforceConfig: boolean): Promise<GateDecision> {
+  const [stored, session, t] = await Promise.all([read($, planTool), read($, enforceSession), read($, task)])
+  const decision = decideGate({
+    tool,
+    isPlanTool: false,
+    planToolName: stored.name ?? PLAN_TOOL_FULL_NAME,
+    enforceConfig,
+    enforceSession: session,
+    toolRegistered: stored.name !== null,
+    toolOffered: stored.offered,
+    planned: t.planned,
+    denies: t.denies,
+  })
+  if (decision.kind === 'deny') {
+    await update($, task, cur => ({ ...cur, denies: cur.denies + 1 }))
+    if (t.denies === 0) safeToast($, `Blocked ${tool}: no plan yet. /todo off turns this off.`)
+  } else if (decision.kind === 'pause' && t.denies === MAX_DENIES) {
+    await update($, task, cur => ({ ...cur, denies: cur.denies + 1 }))
+    safeToast($, decision.toast)
+  }
+
+  return decision
 }
 
 // Answers a call to the plan tool. The hook answers itself and never calls next(e) (T01 Q1/Q3):
@@ -147,7 +197,10 @@ async function mirror($: EngineInterface, name: string, apply: (cur: Plan, now: 
   await refreshStatus($)
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  // A missing value counts as on (D8).
+  const enforceConfig = options.enforce !== false
+
   on('session.start', async ($, e, next) => {
     await guard($, 'session.start', undefined, async () => {
       try {
@@ -163,8 +216,8 @@ export const register: Register = on => {
       }
       await $.command.register({
         name: 'todo',
-        description: 'Show the plan pane, or clear the plan',
-        argumentHint: 'clear',
+        description: 'Show the plan pane, clear the plan, or turn plan enforcement off or on',
+        argumentHint: 'clear | off | on',
       })
       // The pane opens unasked only on the terminal under a person at the prompt.
       if (e.isInteractive && e.surface === 'terminal') await openPane($)
@@ -289,6 +342,10 @@ export const register: Register = on => {
         answerPlanCall($, e, e.agentId),
       )
     }
+    // The gate runs after the plan answer and before the activity wrapper, so a denied call never
+    // shows as Running. A guard failure allows the call.
+    const gated = await guard($, 'gate', { kind: 'allow' } as GateDecision, () => runGate($, e.tool, enforceConfig))
+    if (gated.kind === 'deny') return { deny: gated.message }
     const open: ActivityEvent = kind === 'question' ? { type: 'questionOpen' } : { type: 'toolStart', tool: e.tool }
     const close: ActivityEvent = kind === 'question' ? { type: 'questionClose' } : { type: 'toolEnd' }
     await guard($, 'tool start', undefined, () => applyActivity($, open))
