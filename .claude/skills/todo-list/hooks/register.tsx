@@ -119,7 +119,9 @@ async function refitPane($: EngineInterface, fit: PaneFit): Promise<void> {
   if (!(await $.ui.panes()).some(pane => pane.id === PANE)) return
   await update($, paneFit, () => fit)
   await $.ui.close({ id: PANE })
-  await $.ui.open({ id: PANE, title: 'Plan', rows: fit.wantRows, columns: PANE_COLUMNS })
+  const opened = await $.ui.open({ id: PANE, title: 'Plan', rows: fit.wantRows, columns: PANE_COLUMNS })
+  // The fit stays recorded, so a render that finds it unchanged does not try again.
+  if (!opened.isPlaced) $.ui.log(`todo-list: refit open not placed: ${opened.reason}`.slice(0, LOG_LIMIT), { to: 'debug' })
 }
 
 async function runTodoCommand(

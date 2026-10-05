@@ -775,3 +775,11 @@ test('a pane the person closed is never re-opened by a render', async ($, on) =>
   await drawAt($, 46, 45)
   expect(calls).toEqual([])
 })
+
+test('a viewport change to 80 columns closes nothing and keeps the pane open', async ($, on) => {
+  setup(on)
+  const calls = recordPane(on, true)
+  await drawAt($, 80, 20)
+  await drawAt($, 46, 45)
+  expect(calls).toEqual([])
+})
