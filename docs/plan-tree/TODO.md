@@ -129,7 +129,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - verify: `npm run check`
 
 ### T11 Delete the old todo-list code and atoms
-- status: done (#PR, 2026-10-05)
+- status: done (#13, 2026-10-05)
 - needs: T10
 - size: S
 - scope: Delete the old modules and tests. Remove the `items`, `updatedThisTurn` and `nudgedThisTurn` atoms and the `TodoItem` and `TodoStatus` types from types/index.d.ts.
@@ -187,4 +187,4 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 2026-10-05 T08 #10 TaskCreate/TaskUpdate (and synthetic TodoWrite) mirrored into the tree
 2026-10-05 T09 #11 session activity events wired to the activity line
 2026-10-05 T10 #12 gate blocks edits until a plan exists; fails open; /todo off|on; userConfig.enforce
-2026-10-05 T11 #PR old todo-list modules, tests and atoms deleted
+2026-10-05 T11 #13 old todo-list modules, tests and atoms deleted
