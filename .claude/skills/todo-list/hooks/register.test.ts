@@ -161,6 +161,37 @@ test('/todo with no args opens the pane', async ($, on) => {
   expect(opened).toEqual(['todo'])
 })
 
+test('/todo opens the pane with the dock width and a row count that fits the plan', async ($, on) => {
+  setup(on)
+  const asked: Array<{ rows?: number; columns?: number }> = []
+  on('ui.open', async (_$, e) => {
+    asked.push({ rows: e.rows, columns: e.columns })
+
+    return { value: { isPlaced: true as const } }
+  })
+  await $.command.run(todo(''))
+  await $.tool.call(SET)
+  await $.command.run(todo(''))
+  // An empty plan is one line, clamped up to 6; the 3-leaf plan's tree is 7 lines.
+  expect(asked).toEqual([
+    { rows: 6, columns: 56 },
+    { rows: 7, columns: 56 },
+  ])
+})
+
+test('/todo adds the fullscreen tip only on a wide main-screen layout', async ($, on) => {
+  setup(on)
+  on('ui.open', async () => ({ value: { isPlaced: true as const } }))
+  const tip = 'Tip: the fullscreen layout docks this pane beside the transcript.'
+  const withPresentation = (isFullscreen: boolean, columns: number): CommandRunInput => ({
+    ...todo(''),
+    presentation: { isFullscreen, columns },
+  })
+  expect((await $.command.run(withPresentation(false, 120))).text).toContain(tip)
+  expect((await $.command.run(withPresentation(false, 109))).text).not.toContain(tip)
+  expect((await $.command.run(withPresentation(true, 160))).text).not.toContain(tip)
+})
+
 // The tool beneath the mod: the stub stands in for the real tool and supplies the result.
 const stubTasks = (on: On, update: { success: boolean } = { success: true }): void => {
   on('tool.call', { tool: 'TaskCreate' }, async () => ({ result: { task: { id: '5', subject: 'Write docs' } } }))

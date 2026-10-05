@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { CommandPresentation, EngineInterface, Register } from 'claude-code'
 import type { Plan, PlanToolState, TaskState } from '../types'
 import { emptyActivity, reduceActivity } from './activity'
 import type { ActivityEvent } from './activity'
@@ -19,13 +19,17 @@ import {
   touchesPlan,
 } from './plan-tool'
 import { clean } from './sanitize'
-import { buildTree, DEFAULT_ACCENT, DEFAULT_WIDTH, statusLine } from './tree'
+import { buildTree, DEFAULT_ACCENT, DEFAULT_WIDTH, preferredRows, statusLine } from './tree'
 
 // D4: the registered name is `mcp__<plugin>__<name>`, confirmed by the T01 spike (Q1).
 const PLAN_TOOL_FULL_NAME = `mcp__todo-list__${PLAN_TOOL_SHORT_NAME}`
 const PANE = 'todo'
 const PANE_ROWS = 20
-const PANE_COLUMNS = 48
+const PANE_MIN_ROWS = 6
+const PANE_MAX_ROWS = 20
+const PANE_COLUMNS = 56
+const DOCK_TIP = ' Tip: the fullscreen layout docks this pane beside the transcript.'
+const DOCK_MIN_COLUMNS = 110
 // The host drops $.ui.log text over 4096 characters (T01 extra findings).
 const LOG_LIMIT = 4000
 const ASK_TOOL = 'AskUserQuestion'
@@ -90,11 +94,20 @@ function debugLog($: EngineInterface, text: string): void {
   $.ui.log(text.slice(0, LOG_LIMIT), { to: 'debug' })
 }
 
+// Inline the pane is as tall as the tree wants (a short plan wastes no rows); docked it is
+// PANE_COLUMNS wide. Both are requests: the host decides the placement and may keep a size
+// the person dragged.
 async function openPane($: EngineInterface): Promise<void> {
-  await $.ui.open({ id: PANE, title: 'Plan', rows: PANE_ROWS, columns: PANE_COLUMNS })
+  const [p, a] = await Promise.all([read($, plan), read($, activity)])
+  const rows = Math.min(PANE_MAX_ROWS, Math.max(PANE_MIN_ROWS, preferredRows(p, a)))
+  await $.ui.open({ id: PANE, title: 'Plan', rows, columns: PANE_COLUMNS })
 }
 
-async function runTodoCommand($: EngineInterface, args: string): Promise<{ text: string }> {
+async function runTodoCommand(
+  $: EngineInterface,
+  args: string,
+  presentation: CommandPresentation,
+): Promise<{ text: string }> {
   const raw = args.trim()
   const word = raw.toLowerCase()
   if (word === 'color' || word.startsWith('color ')) {
@@ -111,8 +124,9 @@ async function runTodoCommand($: EngineInterface, args: string): Promise<{ text:
   }
   if (word === '') {
     await openPane($)
+    const tip = !presentation.isFullscreen && presentation.columns >= DOCK_MIN_COLUMNS ? DOCK_TIP : ''
 
-    return { text: 'Plan pane opened.' }
+    return { text: `Plan pane opened.${tip}` }
   }
   if (word === 'off' || word === 'on') {
     await update($, enforceSession, () => word === 'on')
@@ -253,7 +267,7 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'todo' }, async ($, e) =>
-    guard($, 'command.run', { text: 'Todo command failed.' }, () => runTodoCommand($, e.args)),
+    guard($, 'command.run', { text: 'Todo command failed.' }, () => runTodoCommand($, e.args, e.presentation)),
   )
 
   // Without the pin the tool is deferred behind ToolSearch and the model does not see it on

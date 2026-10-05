@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { ActivityState, Plan, PlanNode, PlanStatus } from '../types'
 import type { Seg, TreeLine } from './tree'
-import { buildTree, GLYPHS, statusLine } from './tree'
+import { buildTree, GLYPHS, preferredRows, statusLine } from './tree'
 
 const node = (id: string, status: PlanStatus, extra: Partial<PlanNode> = {}): PlanNode => {
   const parts = id.split('.')
@@ -34,7 +34,7 @@ const twoLevel = planOf(
 )
 
 // A row padded so `count` ends at the right edge of a pane `width` cells wide.
-const padded = (left: string, count: string, width = 48): string =>
+const padded = (left: string, count: string, width = 56): string =>
   `${left}${' '.repeat(width - left.length - count.length)}${count}`
 const find = (lines: TreeLine[], needle: string): TreeLine => {
   const hit = lines.find(l => l.text.includes(needle))
@@ -50,11 +50,11 @@ const segOf = (line: TreeLine, needle: string): Seg => {
 }
 const toolActivity: ActivityState = { phase: 'tool', tool: 'Bash', subagents: ['a'], since: 0 }
 
-test('buildTree draws exact lines for a 2-level fixture at width 48', () => {
-  const lines = buildTree(twoLevel, toolActivity, { maxLines: 20, width: 48 })
+test('buildTree draws exact lines for a 2-level fixture at width 56', () => {
+  const lines = buildTree(twoLevel, toolActivity, { maxLines: 20, width: 56 })
   expect(texts(lines)).toEqual([
     'Add CSV',
-    `${'━'.repeat(16)}${'─'.repeat(16)}  3/6 · 50%`,
+    `${'━'.repeat(20)}${'─'.repeat(20)}  3/6 · 50%`,
     '◉ Running Bash · 1 subagent',
     '',
     padded('├─ ✓ 1 T1', '2/2'),
@@ -109,7 +109,7 @@ test('connectors and ids are dim', () => {
 })
 
 test('parent counts sit dim at the right edge of the given width', () => {
-  for (const width of [48, 60]) {
+  for (const width of [56, 60]) {
     const lines = buildTree(twoLevel, idle, { maxLines: 20, width })
     const row = find(lines, '2 T2')
     expect(row.text).toHaveLength(width)
@@ -141,14 +141,14 @@ test('a tiny width never produces a negative pad or a throw, and counts keep one
 })
 
 test('the progress bar uses a filled accent run and a dim track', () => {
-  const lines = buildTree(twoLevel, idle, { maxLines: 20, width: 48 })
+  const lines = buildTree(twoLevel, idle, { maxLines: 20, width: 56 })
   const bar = lines[1]
-  expect(bar?.segments[0]).toMatchObject({ text: '━'.repeat(16), color: 'cyan' })
-  expect(bar?.segments[1]).toMatchObject({ text: '─'.repeat(16), dim: true })
+  expect(bar?.segments[0]).toMatchObject({ text: '━'.repeat(20), color: 'cyan' })
+  expect(bar?.segments[1]).toMatchObject({ text: '─'.repeat(20), dim: true })
   expect(bar?.segments[3]).toMatchObject({ text: '3/6 · 50%', dim: true })
   expect(lines[0]?.segments[0]).toMatchObject({ bold: true })
   const widths = [10, 20, 80].map(w => (buildTree(twoLevel, idle, { maxLines: 20, width: w })[1]?.text ?? '').split('  ')[0]?.length)
-  expect(widths).toEqual([10, 10, 40])
+  expect(widths).toEqual([6, 6, 40])
 })
 
 test('a custom accent colours the current row and the bar', () => {
@@ -205,7 +205,7 @@ test('a current node 3 levels deep stays visible at maxLines 8 with an accurate 
   expect(lines[lines.length - 1]?.text).toBe(`+${hidden} more`)
   expect(texts(lines)).toEqual([
     'Add CSV',
-    `${'━'.repeat(14)}${'─'.repeat(18)}  3/7 · 43%`,
+    `${'━'.repeat(17)}${'─'.repeat(23)}  3/7 · 43%`,
     '',
     '├─ ✓ 1 T1',
     padded('├─ ◉ 3 T3', '2/4'),
@@ -260,11 +260,11 @@ const parallelPlan = planOf(
 )
 
 test('a parallel parent gets a dim tag right after its title, before the right-aligned count', () => {
-  const row = find(buildTree(parallelPlan, idle, { maxLines: 20, width: 48 }), '2 T2')
+  const row = find(buildTree(parallelPlan, idle, { maxLines: 20, width: 56 }), '2 T2')
   const at = (needle: string): number => row.segments.findIndex(s => s.text.includes(needle))
   expect(segOf(row, '∥ parallel')).toMatchObject({ text: ' ∥ parallel', dim: true })
   expect(at('∥ parallel')).toBe(at('T2') + 1)
-  expect(row.text).toHaveLength(48)
+  expect(row.text).toHaveLength(56)
   expect(row.segments[row.segments.length - 1]).toMatchObject({ text: '0/3', dim: true })
   const plain = find(buildTree(twoLevel, idle, { maxLines: 20 }), '2 T2')
   expect(plain.text).not.toContain('∥')
@@ -316,4 +316,66 @@ test('statusLine names the first running leaf and counts the others', () => {
 test('the parallel glyph passes the no-emoji test and is U+2225', () => {
   expect(GLYPHS.parallel).toBe('∥')
   expect(/\p{Extended_Pictographic}/u.test(GLYPHS.parallel)).toBe(false)
+})
+
+const manyAtWidth = planOf(
+  node('1', 'in_progress', { parallel: true }),
+  node('1.1', 'in_progress', { title: 'A very long step title that cannot fit' }),
+  node('1.2', 'blocked', { note: 'waiting on a long answer from the owner' }),
+)
+const busy: ActivityState = { phase: 'tool', tool: 'WebSearch', subagents: ['a', 'b'], since: 0 }
+
+test('buildTree draws exact lines for the 2-level fixture at width 40', () => {
+  const lines = buildTree(twoLevel, toolActivity, { maxLines: 20, width: 40 })
+  expect(texts(lines)).toEqual([
+    'Add CSV',
+    `${'━'.repeat(13)}${'─'.repeat(13)}  3/6`,
+    '◉ Running Bash · 1 subagent',
+    '',
+    '├─ ✓ 1 T1 2/2',
+    '├─ ◉ 2 T2 1/3',
+    '│  ├─ ✓ 2.1 T2.1',
+    '│  ├─ ◉ 2.2 T2.2 ◂',
+    '│  └─ ■ 2.3 T2.3 (blocked: flag name…',
+    '└─ ○ 3 T3',
+  ])
+})
+
+test('a narrow parent row shows a dim count after the title and a bare parallel tag', () => {
+  const lines = buildTree(manyAtWidth, idle, { maxLines: 20, width: 40 })
+  const row = find(lines, '1 T1')
+  expect(row.text).toBe('└─ ◉ 1 T1 0/2 ∥')
+  expect(segOf(row, '0/2')).toMatchObject({ dim: true })
+  expect(segOf(row, GLYPHS.parallel)).toMatchObject({ dim: true })
+})
+
+test('the narrow activity line drops the subagent count when it would overflow', () => {
+  const lines = buildTree(twoLevel, busy, { maxLines: 20, width: 30 })
+  expect(lines[2]?.text).toBe('◉ Running WebSearch')
+})
+
+test('no line is longer than the width at widths 30 and 40', () => {
+  for (const width of [30, 40]) {
+    for (const plan of [twoLevel, manyAtWidth]) {
+      for (const activity of [idle, toolActivity, busy]) {
+        for (const line of buildTree(plan, activity, { maxLines: 20, width })) {
+          expect(line.text.length).toBeLessThanOrEqual(width)
+        }
+      }
+    }
+  }
+})
+
+test('at width 56 the layout is unchanged: percentage, right-aligned counts, full notes', () => {
+  const lines = buildTree(twoLevel, idle, { maxLines: 20, width: 56 })
+  expect(lines[1]?.text).toBe(`${'━'.repeat(20)}${'─'.repeat(20)}  3/6 · 50%`)
+  expect(find(lines, '1 T1').text).toBe(padded('├─ ✓ 1 T1', '2/2', 56))
+  expect(find(lines, '2.3').text).toBe('│  └─ ■ 2.3 T2.3 (blocked: flag name?)')
+})
+
+test('preferredRows counts every line the tree would draw with no limit', () => {
+  expect(preferredRows(twoLevel, idle)).toBe(buildTree(twoLevel, idle, { maxLines: 1000 }).length)
+  expect(preferredRows(twoLevel, idle)).toBe(9)
+  expect(preferredRows(twoLevel, toolActivity)).toBe(10)
+  expect(preferredRows(planOf(), idle)).toBe(1)
 })

@@ -37,6 +37,14 @@ claude --plugin-dir .claude/skills/todo-list \
 
 `/todo color <name|#hex|reset>` overrides it for the session. The status line shows `Plan 2/7 · Header row +1 more running` while several steps run at once. The pane opens automatically at session start on an interactive terminal, and `/todo` reopens it. The status line shows a short form, for example `Plan 3/7 · Escaping quotes and commas · Running Bash`.
 
+### Layout: inline, docked, narrow
+
+Claude Code chooses where the pane goes, and a plugin cannot force it. The pane docks beside the transcript only in the fullscreen layout, from 110 columns. The main screen always shows it inline above the prompt; the plugin's own type declarations describe the main screen as "`CLAUDE_CODE_NO_FLICKER=0`, tmux by default". To get the fullscreen layout, set `CLAUDE_CODE_NO_FLICKER=1` (inferred from that note; the declarations name only the `=0` value). Under tmux, or on the main screen, expect the inline pane.
+
+The pane asks for 56 columns when docked, and for as many rows as the tree needs (6 to 20) when inline. These are requests: a size you dragged wins. When the pane is inline on a wide terminal, `/todo` adds a tip about the fullscreen layout. The tree always fits the pane's body: if it is too tall, the path to every running step stays visible and the rest becomes `+N more`.
+
+Below 50 columns the pane compacts: a shorter bar, `done/total` with no percentage, the count placed after a parent's title instead of at the right edge, a bare `∥` for a parallel group, notes cut to 20 characters, and no subagent count on the activity line when it would not fit.
+
 ### Node status
 
 | Glyph | Status | Meaning |
