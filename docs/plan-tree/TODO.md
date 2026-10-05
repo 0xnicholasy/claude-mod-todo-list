@@ -138,7 +138,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - verify: `npm run check`
 
 ### T12 Update README, project CLAUDE.md and manifest
-- status: done (#PR, 2026-10-05)
+- status: done (#14, 2026-10-05)
 - needs: T11
 - size: S
 - scope: README: what it does, a text tree sample, the status and activity tables, how enforcement works and the three ways to turn it off, TodoWrite mirroring, known limits (third-party MCP tools not gated, Bash fully gated, Notification types unmapped). CLAUDE.md Stack line lists modules sanitize, plan, plan-tool, tree, activity, gate, ingest. plugin.json description and version 0.2.0.
@@ -187,4 +187,4 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 2026-10-05 T08 #10 TaskCreate/TaskUpdate (and synthetic TodoWrite) mirrored into the tree
 2026-10-05 T09 #11 session activity events wired to the activity line
 2026-10-05 T10 #12 gate blocks edits until a plan exists; fails open; /todo off|on; userConfig.enforce
-2026-10-05 T12 #PR README, CLAUDE.md stack line and manifest 0.2.0
+2026-10-05 T12 #14 README, CLAUDE.md stack line and manifest 0.2.0
