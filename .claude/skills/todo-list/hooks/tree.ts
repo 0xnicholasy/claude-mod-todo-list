@@ -17,9 +17,12 @@ export const GLYPHS = {
   parallel: '∥',
 } as const
 
-export const DEFAULT_WIDTH = 48
+export const DEFAULT_WIDTH = 56
 export const DEFAULT_ACCENT = 'cyan'
 const STATUS_TITLE_MAX = 30
+// Below this width the pane drops the percentage, right-aligned counts and long notes.
+export const NARROW_WIDTH = 50
+const NARROW_NOTE_MAX = 20
 
 // One run of text with one style. A row is a list of these so ids, connectors and titles
 // can be styled apart. There is deliberately no inverse or background field.
@@ -55,14 +58,15 @@ const shorten = (text: string, max: number): string => {
 const clamp = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, n))
 
 const bar = (done: number, total: number, accent: string, width: number): Seg[] => {
-  const cells = clamp(width - 16, 10, 40)
+  const narrow = width < NARROW_WIDTH
+  const cells = narrow ? clamp(width - 14, 6, 40) : clamp(width - 16, 10, 40)
   const filled = total === 0 ? 0 : Math.round((done / total) * cells)
 
   return [
     seg(GLYPHS.filled.repeat(filled), { color: accent }),
     dimSeg(GLYPHS.track.repeat(cells - filled)),
     seg('  '),
-    dimSeg(`${done}/${total} · ${percent(done, total)}%`),
+    dimSeg(narrow ? `${done}/${total}` : `${done}/${total} · ${percent(done, total)}%`),
   ]
 }
 
@@ -116,16 +120,25 @@ type Row = { line: TreeLine; keep: boolean }
 type Ctx = { plan: Plan; currentId: string | null; runningIds: readonly string[]; accent: string; width: number }
 
 const PARALLEL_TAG = ` ${GLYPHS.parallel} parallel`
+const PARALLEL_TAG_NARROW = ` ${GLYPHS.parallel}`
 
 const rowFor = (ctx: Ctx, node: PlanNode, lead: string, hasKids: boolean, collapse: boolean): TreeLine => {
   const { plan, currentId, runningIds, accent, width } = ctx
   const isCurrent = node.id === currentId
   const isRunning = !hasKids && runningIds.includes(node.id)
-  const tag = node.parallel === true && hasKids ? PARALLEL_TAG : ''
+  const narrow = width < NARROW_WIDTH
+  const tag = node.parallel === true && hasKids ? (narrow ? PARALLEL_TAG_NARROW : PARALLEL_TAG) : ''
   const count = hasKids ? countUnder(plan.nodes, node.id) : null
-  const note = collapse ? '' : noteOf(node)
   const marker = isCurrent ? ` ${GLYPHS.marker}` : ''
-  const fixed = lead.length + 2 + node.id.length + 1 + tag.length + note.length + marker.length + (count === null ? 0 : count.length + 1)
+  const countWidth = count === null ? 0 : count.length + 1
+  const rest = lead.length + 2 + node.id.length + 1 + tag.length + marker.length + countWidth
+  let note = collapse ? '' : noteOf(node)
+  if (narrow && note !== '') {
+    // Keep one cell for the title and one for the space before the note.
+    const room = Math.min(NARROW_NOTE_MAX, width - rest - 2)
+    note = room >= 2 ? ` ${shorten(note.trim(), room)}` : ''
+  }
+  const fixed = rest + note.length
   const title = shorten(node.title, Math.max(1, width - fixed))
   let titleSeg: Seg
   let glyphSeg: Seg
@@ -142,10 +155,11 @@ const rowFor = (ctx: Ctx, node: PlanNode, lead: string, hasKids: boolean, collap
     else titleSeg = seg(title)
   }
   const segs: Seg[] = [dimSeg(lead), glyphSeg, seg(' '), dimSeg(node.id), seg(' '), titleSeg]
+  if (narrow && count !== null) segs.push(dimSeg(` ${count}`))
   if (tag !== '') segs.push(dimSeg(tag))
   if (note !== '') segs.push(dimSeg(note))
   if (marker !== '') segs.push(dimSeg(marker))
-  if (count !== null) {
+  if (!narrow && count !== null) {
     const used = segs.reduce((n, s) => n + s.text.length, 0)
     segs.push(seg(' '.repeat(Math.max(1, width - used - count.length))), dimSeg(count))
   }
@@ -173,10 +187,14 @@ const rowsFor = (ctx: Ctx, parentId: string | null, prefix: string): Row[] => {
   return out
 }
 
-const activityLine = (activity: ActivityState, accent: string): TreeLine | null => {
-  const label = activityLabel(activity)
+const activityLine = (activity: ActivityState, accent: string, width: number): TreeLine | null => {
+  let label = activityLabel(activity)
   if (label === undefined) return null
-  const text = `${GLYPHS.in_progress} ${label}`
+  if (width < NARROW_WIDTH && label.length + 2 > width) {
+    // Drop the subagent count first, then cut what is left to the width.
+    label = activityLabel({ ...activity, subagents: [] }) ?? label
+  }
+  const text = shorten(`${GLYPHS.in_progress} ${label}`, width)
   switch (activity.phase) {
     case 'permission':
     case 'question':
@@ -186,7 +204,7 @@ const activityLine = (activity: ActivityState, accent: string): TreeLine | null 
     case 'interrupted':
       return lineOf([dimSeg(text)])
     case 'idle':
-      return lineOf([dimSeg(`${GLYPHS.pending} ${label}`)])
+      return lineOf([dimSeg(shorten(`${GLYPHS.pending} ${label}`, width))])
     case 'working':
     case 'tool':
     case 'compacting':
@@ -197,7 +215,7 @@ const activityLine = (activity: ActivityState, accent: string): TreeLine | null 
 export const buildTree = (plan: Plan, activity: ActivityState, opts: TreeOptions): TreeLine[] => {
   const width = opts.width ?? DEFAULT_WIDTH
   const accent = opts.accent ?? DEFAULT_ACCENT
-  const act = activityLine(activity, accent)
+  const act = activityLine(activity, accent, width)
   if (plan.nodes.length === 0) {
     const empty = lineOf([dimSeg('No plan yet.')])
 
@@ -230,6 +248,10 @@ export const buildTree = (plan: Plan, activity: ActivityState, opts: TreeOptions
 
   return [...head, ...shown, lineOf([dimSeg(`+${rows.length - shown.length} more`)])]
 }
+
+// The tree's line count with no limit: what the pane wants to be tall inline.
+export const preferredRows = (plan: Plan, activity: ActivityState): number =>
+  buildTree(plan, activity, { maxLines: Number.POSITIVE_INFINITY }).length
 
 export const statusLine = (plan: Plan, activity: ActivityState): string | undefined => {
   const label = activityLabel(activity)

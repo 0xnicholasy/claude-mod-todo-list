@@ -161,6 +161,37 @@ test('/todo with no args opens the pane', async ($, on) => {
   expect(opened).toEqual(['todo'])
 })
 
+test('/todo opens the pane with the dock width and a row count that fits the plan', async ($, on) => {
+  setup(on)
+  const asked: Array<{ rows?: number; columns?: number }> = []
+  on('ui.open', async (_$, e) => {
+    asked.push({ rows: e.rows, columns: e.columns })
+
+    return { value: { isPlaced: true as const } }
+  })
+  await $.command.run(todo(''))
+  await $.tool.call(SET)
+  await $.command.run(todo(''))
+  // An empty plan is one line, clamped up to 6; the 3-leaf plan's tree is 7 lines.
+  expect(asked).toEqual([
+    { rows: 6, columns: 56 },
+    { rows: 7, columns: 56 },
+  ])
+})
+
+test('/todo adds the fullscreen tip only on a wide main-screen layout', async ($, on) => {
+  setup(on)
+  on('ui.open', async () => ({ value: { isPlaced: true as const } }))
+  const tip = 'Tip: the fullscreen layout docks this pane beside the transcript.'
+  const withPresentation = (isFullscreen: boolean, columns: number): CommandRunInput => ({
+    ...todo(''),
+    presentation: { isFullscreen, columns },
+  })
+  expect((await $.command.run(withPresentation(false, 120))).text).toContain(tip)
+  expect((await $.command.run(withPresentation(false, 109))).text).not.toContain(tip)
+  expect((await $.command.run(withPresentation(true, 160))).text).not.toContain(tip)
+})
+
 // The tool beneath the mod: the stub stands in for the real tool and supplies the result.
 const stubTasks = (on: On, update: { success: boolean } = { success: true }): void => {
   on('tool.call', { tool: 'TaskCreate' }, async () => ({ result: { task: { id: '5', subject: 'Write docs' } } }))
@@ -573,7 +604,7 @@ test('gate: a throwing toast does not change the deny', async ($, on) => {
 })
 
 // Draws the pane and returns the element tree as JSON, so a test can look for a colour.
-const drawPane = async ($: Engine, bodyColumns = 60): Promise<string> => {
+const drawPane = async ($: Engine, bodyColumns = 60, bodyRows = 20): Promise<string> => {
   const element = await $.ui.render({
     surface: 'terminal',
     component: 'Pane',
@@ -584,7 +615,7 @@ const drawPane = async ($: Engine, bodyColumns = 60): Promise<string> => {
       isFocused: false,
       bodyColumns,
       placement: 'inline',
-      scroll: { offset: 0, bodyRows: 20 },
+      scroll: { offset: 0, bodyRows },
       view: {},
     },
   })
@@ -642,4 +673,23 @@ test('an invalid accentColor plugin option falls back to cyan', { options: { acc
   const out = await drawPane($)
   expect(out).toContain('"color":"cyan"')
   expect(out).not.toContain('red;rm')
+})
+
+test('a pane with few body rows keeps the current step in view and counts what it hides', async ($, on) => {
+  setup(on)
+  const leaves = (from: number, to: number): Array<{ title: string }> =>
+    Array.from({ length: to - from + 1 }, (_, i) => ({ title: `Leaf ${from + i}` }))
+  await $.tool.call({
+    tool: TOOL,
+    op: 'set',
+    title: 'Big plan',
+    nodes: [
+      { title: 'First', children: leaves(1, 8) },
+      { title: 'Second', children: leaves(9, 17) },
+    ],
+  })
+  await $.tool.call({ tool: TOOL, op: 'update', updates: [{ id: '2.9', status: 'in_progress' }] })
+  const out = await drawPane($, 60, 6)
+  expect(out).toContain('Leaf 17')
+  expect(out).toMatch(/\+\d+ more/)
 })
