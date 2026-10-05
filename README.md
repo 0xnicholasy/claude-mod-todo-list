@@ -18,6 +18,19 @@ Inside this repo the mod also loads from the project skills folder. If `/todo` i
 - Pane: titled "Todo". The header shows `done/total` and a text progress bar. Sections run In progress (shows the activeForm), Pending, Done (dimmed), with markers `[>]`, `[ ]`, `[x]`. An empty list shows "No todos yet." The pane opens at session start in an interactive terminal session and with `/todo`.
 - Status line: `Todo 3/7: <activeForm of the in-progress item>`, cleared when the list is empty.
 
+## Manual control
+
+Some sessions offer the model no task tool (`TodoWrite` or `TaskCreate`), so the pane would stay empty. `/todo` subcommands let you manage the list by hand. Items are numbered by their position in the list (all items, from any source).
+
+- `/todo`: open the pane.
+- `/todo add <text>`: append a pending item (id `manual-<n>`).
+- `/todo start <n>`: mark item n in progress; any other in-progress item goes back to pending.
+- `/todo done <n>`: mark item n completed.
+- `/todo rm <n>`: remove item n.
+- `/todo clear`: empty the list.
+
+Each change refreshes the pane and status line. `TodoWrite` keeps manual items. Manual edits do not count as a model update, so the nudge still applies.
+
 ## Requirements
 
 - Claude Code 2.1.289, the version the API types were taken from (see `CLAUDE.md`).

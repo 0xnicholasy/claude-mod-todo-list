@@ -1,9 +1,12 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { TodoItem } from '../types'
+import type { ManualResult } from './todos'
 import {
   addTask,
+  applyManual,
   buildLines,
+  parseTodoArgs,
   replaceAll,
   shouldNudge,
   statusText,
@@ -57,6 +60,27 @@ const applyList = async (
   $.ui.status(statusText(next))
 }
 
+// A hand edit from /todo: replaces the list and refreshes the status line. It does not set
+// updatedThisTurn, which means the model updated its list.
+const applyManualEdit = async (
+  $: EngineInterface,
+  args: string,
+): Promise<{ text: string }> => {
+  const cmd = parseTodoArgs(args)
+  const now = await $.clock.now()
+  let result = { error: 'Todo list unchanged.' } as ManualResult
+  await update($, items, cur => {
+    result = applyManual(cur, cmd, now)
+
+    return 'error' in result ? cur : result.items
+  })
+  if ('error' in result) return { text: result.error }
+  if (cmd.kind !== 'open') $.ui.status(statusText(result.items))
+  await openPane($)
+
+  return { text: result.text }
+}
+
 const openPane = async ($: EngineInterface): Promise<void> => {
   await $.ui.open({ id: PANE, title: 'Todo', rows: PANE_ROWS, columns: PANE_COLUMNS })
 }
@@ -64,7 +88,11 @@ const openPane = async ($: EngineInterface): Promise<void> => {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await guard($, 'session.start', undefined, async () => {
-      await $.command.register({ name: 'todo', description: 'Show the todo list pane' })
+      await $.command.register({
+        name: 'todo',
+        description: 'Show or edit the todo list',
+        argumentHint: 'add <text> | start|done|rm <n> | clear',
+      })
       // The pane opens unasked only on the terminal under a person at the prompt.
       if (e.isInteractive && e.surface === 'terminal') await openPane($)
     })
@@ -72,12 +100,8 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('command.run', { command: 'todo' }, async $ =>
-    guard($, 'command.run', { text: 'Todo pane failed to open.' }, async () => {
-      await openPane($)
-
-      return { text: 'Todo pane opened.' }
-    }),
+  on('command.run', { command: 'todo' }, async ($, e) =>
+    guard($, 'command.run', { text: 'Todo command failed.' }, () => applyManualEdit($, e.args)),
   )
 
   // The instruction is added only when the request offers a todo tool to act on it.

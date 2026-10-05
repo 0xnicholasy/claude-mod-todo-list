@@ -201,3 +201,93 @@ export const withTodoSection = (sections: readonly Section[]): Section[] => [
   ...sections.filter(s => s.id !== SECTION_ID),
   { id: SECTION_ID, text: SECTION_TEXT, scope: 'session' },
 ]
+
+export const USAGE = 'Usage: /todo add <text> | start <n> | done <n> | rm <n> | clear'
+
+export type ParsedCommand =
+  | { kind: 'open' }
+  | { kind: 'add'; text: string }
+  | { kind: 'start' | 'done' | 'rm'; index: number }
+  | { kind: 'clear' }
+  | { kind: 'error'; message: string }
+
+// Parses the text after `/todo`. `index` is the 1-based position the person typed.
+export const parseTodoArgs = (args: string): ParsedCommand => {
+  const trimmed = args.trim()
+  if (trimmed === '') return { kind: 'open' }
+  const space = trimmed.search(/\s/)
+  const word = (space === -1 ? trimmed : trimmed.slice(0, space)).toLowerCase()
+  const rest = space === -1 ? '' : trimmed.slice(space).trim()
+  if (word === 'add') {
+    const text = clean(rest)
+
+    return text === '' ? { kind: 'error', message: `Nothing to add. ${USAGE}` } : { kind: 'add', text }
+  }
+  if (word === 'start' || word === 'done' || word === 'rm') {
+    if (!/^[0-9]+$/.test(rest)) return { kind: 'error', message: `"${clean(rest)}" is not a number. ${USAGE}` }
+
+    return { kind: word, index: Number(rest) }
+  }
+  if (word === 'clear') return { kind: 'clear' }
+
+  return { kind: 'error', message: `Unknown subcommand "${clean(word)}". ${USAGE}` }
+}
+
+const MANUAL_PREFIX = 'manual-'
+
+// Next manual id: 1 + the highest manual number in the list, so an id is never reused.
+const nextManualId = (items: readonly TodoItem[]): string => {
+  let max = 0
+  for (const item of items) {
+    if (!item.id.startsWith(MANUAL_PREFIX)) continue
+    const n = Number(item.id.slice(MANUAL_PREFIX.length))
+    if (Number.isInteger(n) && n > max) max = n
+  }
+
+  return `${MANUAL_PREFIX}${max + 1}`
+}
+
+export type ManualResult = { items: TodoItem[]; text: string } | { error: string }
+
+// Applies a parsed /todo subcommand to the list. `start` keeps one item in progress by
+// demoting the others. An out-of-range index is an error and changes nothing.
+export const applyManual = (
+  items: readonly TodoItem[],
+  cmd: ParsedCommand,
+  now: number,
+): ManualResult => {
+  switch (cmd.kind) {
+    case 'open':
+      return { items: [...items], text: 'Todo pane opened.' }
+    case 'error':
+      return { error: cmd.message }
+    case 'clear':
+      return { items: [], text: 'Cleared the todo list.' }
+    case 'add': {
+      const item: TodoItem = { id: nextManualId(items), content: cmd.text, status: 'pending', updatedAt: now }
+
+      return { items: [...items, item], text: `Added: ${cmd.text} (${items.length + 1} items)` }
+    }
+    default: {
+      const target = items[cmd.index - 1]
+      if (target === undefined) {
+        return { error: `No item ${cmd.index}; the list has ${items.length}. ${USAGE}` }
+      }
+      if (cmd.kind === 'rm') {
+        return { items: items.filter(i => i !== target), text: `Removed: ${target.content}` }
+      }
+      const status: TodoStatus = cmd.kind === 'start' ? 'in_progress' : 'completed'
+      const next = items.map(i => {
+        if (i === target) return { ...i, status, updatedAt: now }
+        if (cmd.kind === 'start' && i.status === 'in_progress') {
+          return { ...i, status: 'pending' as const, updatedAt: now }
+        }
+
+        return i
+      })
+      const verb = cmd.kind === 'start' ? 'Started' : 'Done'
+
+      return { items: next, text: `${verb}: ${target.content}` }
+    }
+  }
+}

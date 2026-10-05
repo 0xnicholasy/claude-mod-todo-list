@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import type { On } from 'claude-code'
+import type { CommandRunInput, On } from 'claude-code'
 
 const TODOS = [{ content: 'Write it', status: 'in_progress' as const, activeForm: 'Writing it' }]
 const DONE = { oldTodos: [], newTodos: TODOS }
@@ -83,4 +83,22 @@ test('prompt.compose adds the todo section once, and none without a todo tool', 
   expect(again.sections.filter(s => s.id === 'todo-list:instruction')).toHaveLength(1)
   const without = await $.prompt.compose({ ...base, tools: ['Read', 'Bash'] })
   expect(without.sections.filter(s => s.id === 'todo-list:instruction')).toHaveLength(0)
+})
+
+const todo = (args: string): CommandRunInput => ({
+  command: 'todo',
+  args,
+  origin: { kind: 'composer' },
+  presentation: { isFullscreen: false, columns: 80 },
+})
+
+test('/todo add through the hook adds an item, refreshes the status and leaves the turn flag alone', async ($, on) => {
+  const { statuses } = setup(on)
+  on('ui.open', async () => ({ value: { isPlaced: true as const } }))
+  const out = await $.command.run(todo('add write docs'))
+  expect(out.text).toBe('Added: write docs (1 items)')
+  expect(statuses).toEqual(['Todo 0/1'])
+  const bad = await $.command.run(todo('done 5'))
+  expect(bad.text).toContain('No item 5')
+  expect(statuses).toEqual(['Todo 0/1'])
 })
