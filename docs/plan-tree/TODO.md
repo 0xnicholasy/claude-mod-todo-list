@@ -1,8 +1,8 @@
 # Plan Tree: plugin-driven task plans with live Claude state
 
 ultraplan: plan-tree | branch: feat/plan-tree | base: main | tag: pre-plan-tree-main | created: 2026-10-05
-Status: ACTIVE
-Progress: 13/14 done
+Status: COMPLETE 2026-10-05, kept as backlog
+Progress: 14/14 done
 
 ## Goal
 With the plugin loaded, every prompt that leads to tool use gets a plan tree that Claude writes through the plugin's own `mcp__todo-list__plan` tool. That tree is the only record of progress. A pane and status line draw it as a box-drawing tree with per-node status (Completed, In progress, Pending, Blocked, Skipped). They also show what Claude is doing now: working, running a tool, waiting for permission, waiting for your answer, compacting, interrupted, error, and how many subagents are running. State-changing tools are blocked until a plan exists. Enforcement fails open and the user can switch it off.
@@ -156,7 +156,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - verify: `claude --plugin-dir .claude/skills/todo-list`
 
 ### TZZ Cleanup and land
-- status: todo
+- status: done (#PR, 2026-10-05)
 - needs: every other todo
 - scope: run `/implement cleanup`
 - done when: skill removed from the branch, TODO.md archived, landing PR into main open and approved by the owner
@@ -203,3 +203,4 @@ T13 step 8: pass - Esc during a long reply: status line "todo-list: Interrupted"
 T13 step 9: pass - 2-level plan "Demo": finished branches render "├─ ✓ 1 Phase A (2/2)" and "└─ ✓ 2 Phase B (2/2)", header "Demo 4/4 ██████████████ 100%", status "Plan 4/4"; 2-level render with ◉ ○ ├─ └─ glyphs and 14-cell bar seen at "Demo 2/4 ███████░░░░░░░ 50%"
 T13 step 10: pass - with a finished 3/3 plan, a follow-up "call Edit first" prompt got the toast "Blocked Edit: no plan yet." and Claude re-planned ("Append 'Sixth line.'")
 T13 step 11: unobservable - the background agent finished after the plan was done and the notification turn made no Edit call, so no deny was exercised; covered by gate.test.ts "empty text and task-notification prompts keep the task unchanged". No Blocked toast appeared.
+2026-10-05 TZZ #PR cleanup; landing PR into main opened
