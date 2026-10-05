@@ -2,7 +2,7 @@
 
 ultraplan: plan-tree | branch: feat/plan-tree | base: main | tag: pre-plan-tree-main | created: 2026-10-05
 Status: ACTIVE
-Progress: 8/14 done
+Progress: 9/14 done
 
 ## Goal
 With the plugin loaded, every prompt that leads to tool use gets a plan tree that Claude writes through the plugin's own `mcp__todo-list__plan` tool. That tree is the only record of progress. A pane and status line draw it as a box-drawing tree with per-node status (Completed, In progress, Pending, Blocked, Skipped). They also show what Claude is doing now: working, running a tool, waiting for permission, waiting for your answer, compacting, interrupted, error, and how many subagents are running. State-changing tools are blocked until a plan exists. Enforcement fails open and the user can switch it off.
@@ -111,7 +111,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - verify: `npm run check`
 
 ### T09 Wire session-activity events
-- status: todo
+- status: done (#PR, 2026-10-05)
 - needs: T05, T08
 - size: S
 - scope: In register.tsx feed `reduceActivity` from turn.start; turn.complete (reason); tool.call around `next` (main loop, not the plan tool); AskUserQuestion's tool.call around `next` (question); tool.check with `tool_use_id` and decision `ask` (permission) plus classic.PermissionRequest as a second signal; session.compact around `next` (main loop only); classic.SubagentStart and classic.SubagentStop; classic.StopFailure; session.end with reason `clear` produces sessionClear; ignore turn.complete events with an `agentId`. Log classic.Notification `notification_type` to the debug log only for now. Refresh the status line on each change. Truncate any `$.ui.log` text to 4,000 chars (host drops over 4096).
@@ -171,6 +171,9 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - Update the "Current mods" line for todo-list in the parent `claude-mods/CLAUDE.md` (outside this repo).
 - T02 follow-ups: `Plan` carries an extra `issued` counter list (not in the T02 scope text) so removed ids are never reused; T03 to T08 must pass the whole `Plan` through and use `emptyPlan()`. Parent rollup is: in_progress > blocked > all completed/skipped = completed > some done = in_progress > pending. `progress` counts skipped leaves as done; `hasUnfinished` treats blocked leaves as unfinished. Confirm both in T04/T06.
 - Persist the plan across `/clear` or resume via `$.store` if the owner wants that.
+- T09: with parallel tool calls, the first toolEnd drops the status to Working while another tool still runs.
+- T09: a subagent's permission prompt shows as the main session waiting.
+- T09: the permission and AskUserQuestion states were not captured live because dialogs cover the pane; T13 records this.
 
 ## Log
 2026-10-05 T01 #2 spike answered Q1-Q10 (10 observed, 0 unobserved; sub-points unobserved listed in spike.md)
@@ -182,3 +185,4 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 2026-10-05 T03 #7 plan tool schema, parser and model-facing text
 2026-10-05 T07 #9 plan tool, tree pane and status line live (3-level schema confirmed)
 2026-10-05 T08 #10 TaskCreate/TaskUpdate (and synthetic TodoWrite) mirrored into the tree
+2026-10-05 T09 #PR session activity events wired to the activity line
