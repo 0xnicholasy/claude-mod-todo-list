@@ -15,7 +15,7 @@ A Claude Code mod ("Todo List"): a pane, status line and gentle nudges that foll
 - No `any` or `unknown` without a comment that justifies it.
 - Never silence a TypeScript error with `// eslint-disable`.
 - State lives in `$.state` atoms declared in `types/index.d.ts`, never in module variables.
-- The nudge never blocks: no hook returns `deny`.
+- The gate denies only blocked main-loop tools while the task has no plan; it fails open (guard failure, tool unregistered or not offered, enforcement off, 3 denies in a turn).
 
 ## Delivery
 

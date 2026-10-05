@@ -1,4 +1,5 @@
-import type { CommandRunInput, On } from 'claude-code'
+import type { CommandRunInput, EngineInterface, On } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
 // The plan tool is called by its literal name: $.tool.register is not available under
@@ -437,4 +438,119 @@ test('Notification is logged by type only, and the call result is unchanged', as
   on('classic.Notification', async () => ({}))
   await $.classic.Notification({ message: 'secret text', notification_type: 'permission_prompt' })
   expect(logs).toEqual(['todo-list: notification permission_prompt'])
+})
+
+// The gate (T10). The gate allows unless the plan tool is registered and offered, and under
+// `claude plugin test` registration does not run, so each test first sends a prompt.compose that
+// lists the plan tool, which stores the name and marks it offered. Edit and Bash are stubbed
+// beneath the mod, and toasts are recorded.
+const gateSetup = async ($: Engine, on: On, corrupt = { task: false, toast: false }): Promise<{ toasts: string[] }> => {
+  const toasts: string[] = []
+  on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
+  on('prompt.compose', async () => ({ sections: [] }))
+  on('ui.toast', async (_$, e, next) => {
+    if (corrupt.toast) throw new Error('toast failed')
+    toasts.push(e.text)
+
+    return next(e)
+  })
+  // The seam for a forced throw: once `corrupt.task` is set, the task atom reads back malformed.
+  on('state.get', async (_$, e, next) => (corrupt.task && e.key === 'task' ? { value: { value: null, version: 1 } } : next(e)))
+  on('tool.call', { tool: 'Edit' }, async () => ({ result: 'edited' }))
+  on('tool.call', { tool: 'Read' }, async () => ({ result: 'read' }))
+  setup(on)
+  const base = { model: 'm', promptModel: 'm', surfaces: [], outputStyle: null, traits: [] }
+  await $.prompt.compose({ ...base, tools: ['Read', 'Edit', TOOL] })
+
+  return { toasts }
+}
+const EDIT = { tool: 'Edit', file_path: '/x', old_string: 'a', new_string: 'b' } as const
+const isDenied = (out: { deny?: string }): boolean => out.deny !== undefined
+
+test('gate: Edit is denied before a plan and allowed after a set', async ($, on) => {
+  const { toasts } = await gateSetup($, on)
+  await $.turn.start({ text: 'edit a file', turnId: 't1' })
+  const denied = await $.tool.call(EDIT)
+  expect(denied.deny).toContain(TOOL)
+  expect(denied.deny).toContain('"op":"set"')
+  expect(toasts).toEqual(['Blocked Edit: no plan yet. /todo off turns this off.'])
+  await $.tool.call(SET)
+  const allowed = await $.tool.call(EDIT)
+  expect(allowed.deny).toBeUndefined()
+  expect(allowed.result).toBe('edited')
+})
+
+test('gate: Read is allowed with no plan', async ($, on) => {
+  const { toasts } = await gateSetup($, on)
+  await $.turn.start({ text: 'look', turnId: 't1' })
+  const out = await $.tool.call({ tool: 'Read', file_path: '/x' })
+  expect(out.result).toBe('read')
+  expect(toasts).toEqual([])
+})
+
+test('gate: enforce false in the plugin options allows Edit', { options: { enforce: false } }, async ($, on) => {
+  const { toasts } = await gateSetup($, on)
+  await $.turn.start({ text: 'edit a file', turnId: 't1' })
+  const out = await $.tool.call(EDIT)
+  expect(out.result).toBe('edited')
+  expect(toasts).toEqual([])
+})
+
+test('gate: /todo off allows Edit and /todo on re-arms the gate', async ($, on) => {
+  await gateSetup($, on)
+  await $.turn.start({ text: 'edit a file', turnId: 't1' })
+  const off = await $.command.run(todo('off'))
+  expect(off.text).toContain('off')
+  expect((await $.tool.call(EDIT)).result).toBe('edited')
+  const onReply = await $.command.run(todo('on'))
+  expect(onReply.text).toContain('on')
+  expect(isDenied(await $.tool.call(EDIT))).toBe(true)
+})
+
+test('gate: a throw in the gate path allows the call', async ($, on) => {
+  const corrupt = { task: false, toast: false }
+  await gateSetup($, on, corrupt)
+  await $.turn.start({ text: 'edit a file', turnId: 't1' })
+  expect(isDenied(await $.tool.call(EDIT))).toBe(true)
+  // The gate now reads a malformed task atom and throws; the guard fails open.
+  corrupt.task = true
+  const out = await $.tool.call(EDIT)
+  expect(out.deny).toBeUndefined()
+  expect(out.result).toBe('edited')
+})
+
+test('gate: a subagent Edit is allowed', async ($, on) => {
+  const { toasts } = await gateSetup($, on)
+  await $.turn.start({ text: 'edit a file', turnId: 't1' })
+  const sub: Parameters<typeof $.tool.call>[0] & { agentId: string } = { ...EDIT, agentId: 'sub-1' }
+  const out = await $.tool.call(sub)
+  expect(out.result).toBe('edited')
+  expect(toasts).toEqual([])
+})
+
+test('gate: the 4th blocked call in a turn is allowed, and the toast shows once per turn', async ($, on) => {
+  const { toasts } = await gateSetup($, on)
+  await $.turn.start({ text: 'edit a file', turnId: 't1' })
+  expect(isDenied(await $.tool.call(EDIT))).toBe(true)
+  expect(isDenied(await $.tool.call(EDIT))).toBe(true)
+  expect(isDenied(await $.tool.call(EDIT))).toBe(true)
+  // Three denies, one deny toast.
+  expect(toasts).toEqual(['Blocked Edit: no plan yet. /todo off turns this off.'])
+  expect((await $.tool.call(EDIT)).result).toBe('edited')
+  expect((await $.tool.call(EDIT)).result).toBe('edited')
+  // The pause toast also shows once.
+  expect(toasts).toEqual(['Blocked Edit: no plan yet. /todo off turns this off.', 'Plan enforcement paused for this turn'])
+  // A new prompt re-arms the gate and the deny toast shows again.
+  await $.turn.start({ text: 'another edit', turnId: 't2' })
+  expect(isDenied(await $.tool.call(EDIT))).toBe(true)
+  expect(toasts).toHaveLength(3)
+})
+
+test('gate: a throwing toast does not change the deny', async ($, on) => {
+  const corrupt = { task: false, toast: true }
+  await gateSetup($, on, corrupt)
+  await $.turn.start({ text: 'edit a file', turnId: 't1' })
+  const denied = await $.tool.call(EDIT)
+  expect(denied.deny).toContain(TOOL)
+  expect(denied.result).toBeUndefined()
 })
