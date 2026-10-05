@@ -179,3 +179,29 @@ test('touchesPlan is false for show and true for every op that writes the plan',
   expect(touchesPlan(parsed({ op: 'update', updates: [{ id: '1', status: 'completed' }] }))).toBe(true)
   expect(touchesPlan(parsed({ op: 'remove', id: '1' }))).toBe(true)
 })
+
+test('parallel parses at depth 1 to 3 and in updates', () => {
+  const nodes = [{ title: 'A', parallel: true, children: [{ title: 'B', parallel: false, children: [{ title: 'C' }] }] }]
+  const r = parsePlanInput({ op: 'set', title: 'P', nodes })
+  if (!('parsed' in r) || r.parsed.op !== 'set') throw new Error('expected a parsed set')
+  expect(r.parsed.nodes[0]?.parallel).toBe(true)
+  expect(r.parsed.nodes[0]?.children?.[0]?.parallel).toBe(false)
+  const u = parsePlanInput({ op: 'update', updates: [{ id: '1', parallel: true }] })
+  if (!('parsed' in u) || u.parsed.op !== 'update') throw new Error('expected a parsed update')
+  expect(u.parsed.updates[0]?.parallel).toBe(true)
+})
+
+test('a non-boolean parallel gives an error naming the field', () => {
+  const a = parsePlanInput({ op: 'set', title: 'P', nodes: [{ title: 'A', children: [{ title: 'B', parallel: 'yes' }] }] })
+  expect('error' in a && a.error).toContain('nodes[0].children[0].parallel must be a boolean')
+  const b = parsePlanInput({ op: 'update', updates: [{ id: '1', parallel: 1 }] })
+  expect('error' in b && b.error).toContain('updates[0].parallel must be a boolean')
+})
+
+test('formatForModel marks a parallel parent and the schema offers parallel at every depth', () => {
+  const plan = setPlan(emptyPlan(), 'P', [{ title: 'Group', parallel: true, children: [{ title: 'A' }, { title: 'B' }] }], 1)
+  if ('error' in plan) throw new Error(plan.error)
+  expect(formatForModel(plan.plan)).toContain('1 [pending] Group [parallel]')
+  expect(formatForModel(plan.plan)).not.toContain('1.1 [pending] A [parallel]')
+  expect(JSON.stringify(PLAN_INPUT_SCHEMA).split('"parallel"').length - 1).toBe(4)
+})

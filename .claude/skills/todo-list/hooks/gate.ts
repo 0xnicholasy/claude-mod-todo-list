@@ -67,7 +67,7 @@ export const INSTRUCTION_ID = 'todo-list:plan'
 
 export const INSTRUCTION_TEXT = (toolName: string): string =>
   `Plan tree: before using any tool other than read-only ones, create a plan with the ${toolName} tool (op "set"). ` +
-  'Keep exactly one leaf in_progress at a time. Mark each leaf completed immediately when it is done. ' +
+  'Before creating the plan, find steps that do not conflict (different files, independent research, separate subagents) and put them under one parent with "parallel": true, then run them concurrently (for example several Agent calls in one message). Outside a parallel group keep exactly one leaf in_progress. Mark each leaf completed immediately when it is done. ' +
   'Use blocked or skipped with a note when a leaf cannot or need not be done. ' +
   'When a requirement is unclear, ask with AskUserQuestion and mark the affected node blocked with the question as the note. ' +
   'Pure Q&A needs no plan. ' +
