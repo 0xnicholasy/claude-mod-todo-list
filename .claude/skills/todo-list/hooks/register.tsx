@@ -476,7 +476,10 @@ export const register: Register = (on, options) => {
       async () => {
         const { Box, Text } = $.ui.resolve(e)
         const [p, a, override] = await Promise.all([read($, plan), read($, activity), read($, accentOverride)])
-        const maxLines = Math.max(6, (e.viewport?.rows ?? PANE_ROWS) - 4)
+        // The engine clips the body to scroll.bodyRows, so the tree must fit that and not the
+        // whole terminal, or the bottom (usually the current step) is cut off silently.
+        const bodyRows = e.props.scroll?.bodyRows ?? 0
+        const maxLines = bodyRows > 0 ? bodyRows : Math.max(6, (e.viewport?.rows ?? PANE_ROWS) - 4)
         // bodyColumns is the room inside the pane frame; the viewport is the whole terminal.
         const width = e.props.bodyColumns > 0 ? e.props.bodyColumns : DEFAULT_WIDTH
         const accent = override ?? accentConfig

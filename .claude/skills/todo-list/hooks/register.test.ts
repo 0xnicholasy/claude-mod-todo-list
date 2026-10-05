@@ -573,7 +573,7 @@ test('gate: a throwing toast does not change the deny', async ($, on) => {
 })
 
 // Draws the pane and returns the element tree as JSON, so a test can look for a colour.
-const drawPane = async ($: Engine, bodyColumns = 60): Promise<string> => {
+const drawPane = async ($: Engine, bodyColumns = 60, bodyRows = 20): Promise<string> => {
   const element = await $.ui.render({
     surface: 'terminal',
     component: 'Pane',
@@ -584,7 +584,7 @@ const drawPane = async ($: Engine, bodyColumns = 60): Promise<string> => {
       isFocused: false,
       bodyColumns,
       placement: 'inline',
-      scroll: { offset: 0, bodyRows: 20 },
+      scroll: { offset: 0, bodyRows },
       view: {},
     },
   })
@@ -642,4 +642,23 @@ test('an invalid accentColor plugin option falls back to cyan', { options: { acc
   const out = await drawPane($)
   expect(out).toContain('"color":"cyan"')
   expect(out).not.toContain('red;rm')
+})
+
+test('a pane with few body rows keeps the current step in view and counts what it hides', async ($, on) => {
+  setup(on)
+  const leaves = (from: number, to: number): Array<{ title: string }> =>
+    Array.from({ length: to - from + 1 }, (_, i) => ({ title: `Leaf ${from + i}` }))
+  await $.tool.call({
+    tool: TOOL,
+    op: 'set',
+    title: 'Big plan',
+    nodes: [
+      { title: 'First', children: leaves(1, 8) },
+      { title: 'Second', children: leaves(9, 17) },
+    ],
+  })
+  await $.tool.call({ tool: TOOL, op: 'update', updates: [{ id: '2.9', status: 'in_progress' }] })
+  const out = await drawPane($, 60, 6)
+  expect(out).toContain('Leaf 17')
+  expect(out).toMatch(/\+\d+ more/)
 })
