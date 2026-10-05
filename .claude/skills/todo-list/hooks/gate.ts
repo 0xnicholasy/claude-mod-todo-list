@@ -67,10 +67,11 @@ export const INSTRUCTION_ID = 'todo-list:plan'
 
 export const INSTRUCTION_TEXT = (toolName: string): string =>
   `Plan tree: before using any tool other than read-only ones, create a plan with the ${toolName} tool (op "set"). ` +
-  'Keep exactly one leaf in_progress at a time. Mark each leaf completed immediately when it is done. ' +
+  'Before creating the plan, find steps that do not conflict (different files, independent research, separate subagents) and put them under one parent with "parallel": true, then run them concurrently (for example several Agent calls in one message). Outside a parallel group keep exactly one leaf in_progress. Mark each leaf completed immediately when it is done. ' +
   'Use blocked or skipped with a note when a leaf cannot or need not be done. ' +
   'When a requirement is unclear, ask with AskUserQuestion and mark the affected node blocked with the question as the note. ' +
-  'Pure Q&A needs no plan.'
+  'Pure Q&A needs no plan. ' +
+  `If the tool is not loaded, load it first with ToolSearch (query "select:${toolName}").`
 
 // Sent with each new prompt (D12). `format` renders the tree; without it the ids and statuses are listed.
 // Returns undefined for an empty plan.
@@ -87,4 +88,5 @@ export const planContext = (
 
 export const denyText = (tool: string, toolName: string): string =>
   `Blocked ${tool}: there is no plan for this task yet. ` +
-  `Call ${toolName} with {"op":"set","title":"<task>","nodes":[{"title":"<step>"}]} first, then retry ${tool}.`
+  `Call ${toolName} with {"op":"set","title":"<task>","nodes":[{"title":"<step>"}]} first, then retry ${tool}. ` +
+  `If the tool is not loaded, load it first with ToolSearch (query "select:${toolName}").`

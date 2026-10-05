@@ -94,13 +94,16 @@ test('denyText spells out the exact set call and never mentions /todo off', () =
   expect(t).toContain(`Call ${TOOL} with {"op":"set","title":"<task>","nodes":[{"title":"<step>"}]}`)
   expect(t).toContain('retry Edit')
   expect(t).not.toContain('/todo off')
+  expect(t).toContain(`ToolSearch (query "select:${TOOL}")`)
 })
 
 test('instruction text names the tool and the key rules', () => {
   const t = INSTRUCTION_TEXT(TOOL)
-  for (const s of [TOOL, 'in_progress', 'completed', 'blocked', 'skipped', 'AskUserQuestion', 'Pure Q&A']) {
+  for (const s of [TOOL, 'in_progress', 'completed', 'blocked', 'skipped', 'AskUserQuestion', 'Pure Q&A', `ToolSearch (query "select:${TOOL}")`]) {
     expect(t).toContain(s)
   }
+  expect(t).toContain('"parallel": true')
+  expect(t).not.toContain('Keep exactly one leaf in_progress at a time')
 })
 
 test('planContext is undefined for an empty plan and lists the plan otherwise', () => {

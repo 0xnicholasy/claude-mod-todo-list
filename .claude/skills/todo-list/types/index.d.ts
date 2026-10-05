@@ -9,6 +9,7 @@ export type PlanNode = {
   activeForm?: string
   status: PlanStatus
   note?: string
+  parallel?: boolean
   source: PlanSource
   externalId?: string
   updatedAt: number
@@ -52,6 +53,7 @@ declare module 'claude-code' {
           activeForm?: string
           status: 'pending' | 'in_progress' | 'completed' | 'blocked' | 'skipped'
           note?: string
+          parallel?: boolean
           source: 'plan' | 'todo' | 'task'
           externalId?: string
           updatedAt: number

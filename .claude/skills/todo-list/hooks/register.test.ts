@@ -131,6 +131,23 @@ test('/todo clear empties the plan and the status line; other subcommands show u
   expect(statuses.at(-1)).toBeUndefined()
 })
 
+// Limit: $.tool.register is not a function under `claude plugin test` (T01 Q9), so the success
+// path that calls $.ui.invalidate('tool.describe') cannot run here. This pins the seam that can
+// be observed: when registration fails, session.start logs it and does not invalidate.
+test('session.start does not invalidate tool.describe when registration fails', async ($, on) => {
+  const { logs } = setup(on)
+  const invalidated: string[] = []
+  on('session.start', async (_$, e) => ({ cwd: e.cwd }))
+  on('ui.invalidate', async (_$, e, next) => {
+    invalidated.push(e.event)
+
+    return next(e)
+  })
+  await $.session.start({ cwd: '/tmp', isInteractive: false, surface: 'terminal' })
+  expect(logs.some(l => l.includes('plan tool registration failed'))).toBe(true)
+  expect(invalidated).toEqual([])
+})
+
 test('/todo with no args opens the pane', async ($, on) => {
   setup(on)
   const opened: string[] = []

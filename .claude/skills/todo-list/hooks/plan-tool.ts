@@ -13,7 +13,7 @@ const PLAN_STATUSES: readonly PlanStatus[] = ['pending', 'in_progress', 'complet
 
 export const PLAN_TOOL_DESCRIPTION = [
   'Keep a plan tree for the current task. Call op "set" once at the start of any task that needs tools, with a short title and the steps as nodes (children nest up to 3 levels).',
-  'Keep exactly one leaf in_progress at a time, and mark each leaf completed with op "update" as soon as it is done.',
+  'Put steps that do not conflict (different files, independent subagents) under one parent with "parallel": true and run them concurrently; outside a parallel group keep exactly one leaf in_progress at a time, and mark each leaf completed with op "update" as soon as it is done.',
   'If a step cannot proceed or is dropped, set it to blocked or skipped and give a note that says why.',
   'Use op "add" to attach new subtasks under a node (or at the top level) when the work grows, op "remove" to drop a node and its subtree, and op "show" to read the current tree and ids.',
   'A parent node takes its status from its children, so only update leaves.',
@@ -27,6 +27,7 @@ const nodeSchema = (levels: number): SchemaNode => {
   const properties: Record<string, SchemaNode> = {
     title: { type: 'string', description: `Short step title, at most ${MAX_TITLE} characters` },
     activeForm: { type: 'string', description: 'Present-tense form shown while the step runs, e.g. "Writing tests"' },
+    parallel: { type: 'boolean', description: 'True when this parent\'s children do not conflict and may run concurrently; parents only' },
   }
   if (levels > 1) {
     properties.children = { type: 'array', description: 'Substeps', items: nodeSchema(levels - 1) }
@@ -52,6 +53,7 @@ export const PLAN_INPUT_SCHEMA: Record<string, unknown> = {
           id: { type: 'string', description: 'Node id, e.g. "2.1"' },
           status: { type: 'string', enum: [...PLAN_STATUSES], description: 'New status; leaves only' },
           title: { type: 'string', description: 'New title' },
+          parallel: { type: 'boolean', description: 'Set or clear the parallel flag; parents only' },
           note: { type: 'string', description: `Why it is blocked or skipped, at most ${MAX_NOTE} characters; empty text clears it` },
         },
         required: ['id'],
@@ -96,6 +98,14 @@ const stringField = (obj: Raw, key: string, where: string): { value: string | un
 }
 
 // unknown: only reports the runtime type of untrusted model input in an error message.
+const boolField = (obj: Raw, key: string, where: string): { value: boolean | undefined } | { error: string } => {
+  const v = obj[key]
+  if (v === undefined) return { value: undefined }
+  if (typeof v !== 'boolean') return fail(`${where}${key} must be a boolean, got ${describe(v)}`)
+
+  return { value: v }
+}
+
 const describe = (v: unknown): string => (v === null ? 'null' : Array.isArray(v) ? 'an array' : `a ${typeof v}`)
 
 // unknown: nodes arrive as untrusted model input and are validated element by element.
@@ -110,6 +120,9 @@ const parseNodes = (raw: unknown, maxLevels: number, where: string, level = 1): 
     const form = stringField(item, 'activeForm', `${at}.`)
     if ('error' in form) return form
     if (form.value !== undefined) node.activeForm = form.value
+    const par = boolField(item, 'parallel', `${at}.`)
+    if ('error' in par) return par
+    if (par.value !== undefined) node.parallel = par.value
     if (item.children !== undefined) {
       if (!Array.isArray(item.children)) return fail(`${at}.children must be an array, got ${describe(item.children)}`)
       if (item.children.length > 0) {
@@ -146,6 +159,9 @@ const parseUpdates = (raw: unknown): { updates: NodeUpdate[] } | { error: string
     const note = stringField(item, 'note', `${at}.`)
     if ('error' in note) return note
     if (note.value !== undefined) update.note = note.value
+    const par = boolField(item, 'parallel', `${at}.`)
+    if ('error' in par) return par
+    if (par.value !== undefined) update.parallel = par.value
     updates.push(update)
   }
 
@@ -215,7 +231,9 @@ export const formatForModel = (plan: Plan): string => {
   const lines = plan.nodes.map(n => {
     const note = n.note === undefined ? '' : ` (${clean(n.note)})`
 
-    return `${'  '.repeat(n.id.split('.').length - 1)}${n.id} [${STATUS_WORD[n.status]}] ${clean(n.title)}${note}`
+    const par = n.parallel === true ? ' [parallel]' : ''
+
+    return `${'  '.repeat(n.id.split('.').length - 1)}${n.id} [${STATUS_WORD[n.status]}] ${clean(n.title)}${par}${note}`
   })
   const out = [head]
   let size = head.length

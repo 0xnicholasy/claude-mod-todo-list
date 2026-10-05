@@ -3,7 +3,7 @@
 All line numbers refer to `vendor/claude-code/claude-code.d.ts` (Claude Code 2.1.289).
 
 ## Data model (types/index.d.ts, inline)
-- `plan`: { title, nodes[] }. Each node is { id, parentId, title, activeForm?, status, note?, source, externalId?, updatedAt }. Flat because PluginState types must be inline and cannot be recursive. Ids are stable paths ("2.1.3"), never renumbered.
+- `plan`: { title, nodes[] }. Each node is { id, parentId, title, activeForm?, status, note?, parallel?, source, externalId?, updatedAt }. Flat because PluginState types must be inline and cannot be recursive. `parallel: true` on a parent means its children may run concurrently (rejected on a leaf); two in_progress leaves are legal only when their lowest common ancestor is parallel. Ids are stable paths ("2.1.3"), never renumbered.
 - `task`: { open, planned, denies }. Reset on turn.start with non-empty text (D7).
 - `activity`: { phase, tool?, detail?, subagents[], since }.
 - `enforceSession`: boolean, default true.
@@ -12,9 +12,9 @@ All line numbers refer to `vendor/claude-code/claude-code.d.ts` (Claude Code 2.1
 ## Plan tool (`mcp__todo-list__plan`)
 | op | input | effect |
 |---|---|---|
-| set | title, nodes[{ title, activeForm?, children? }] to depth 3 | replaces the source:'plan' nodes |
+| set | title, nodes[{ title, activeForm?, parallel?, children? }] to depth 3 | replaces the source:'plan' nodes |
 | add | parent?, nodes[...] | appends children (top level when parent is absent) |
-| update | updates[{ id, status?, title?, note? }] | batch patch, leaves only for status |
+| update | updates[{ id, status?, title?, note?, parallel? }] | batch patch, leaves only for status, parallel on parents only |
 | remove | id | drops the subtree |
 | show | none | returns the current tree |
 
