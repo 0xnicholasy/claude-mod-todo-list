@@ -1,6 +1,20 @@
 {
   "name": "todo-list",
-  "version": "0.1.0",
-  "description": "A todo pane, status line and gentle nudges that follow Claude's task list.",
-  "types": "./types/index.d.ts"
+  "version": "0.2.0",
+  "description": "Plan trees written by Claude through a plan tool, shown in a pane and status line with live activity.",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "enforce": {
+      "type": "boolean",
+      "title": "Enforce plan",
+      "description": "Block state-changing tools until a plan exists",
+      "default": true
+    },
+    "accentColor": {
+      "type": "string",
+      "title": "Accent color",
+      "description": "Theme key or color for the current step, progress bar and running state (for example cyan, magenta, green, #c084fc)",
+      "default": "cyan"
+    }
+  }
 }
