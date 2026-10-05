@@ -2,7 +2,7 @@
 
 ultraplan: plan-tree | branch: feat/plan-tree | base: main | tag: pre-plan-tree-main | created: 2026-10-05
 Status: ACTIVE
-Progress: 6/14 done
+Progress: 7/14 done
 
 ## Goal
 With the plugin loaded, every prompt that leads to tool use gets a plan tree that Claude writes through the plugin's own `mcp__todo-list__plan` tool. That tree is the only record of progress. A pane and status line draw it as a box-drawing tree with per-node status (Completed, In progress, Pending, Blocked, Skipped). They also show what Claude is doing now: working, running a tool, waiting for permission, waiting for your answer, compacting, interrupted, error, and how many subagents are running. State-changing tools are blocked until a plan exists. Enforcement fails open and the user can switch it off.
@@ -93,7 +93,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - verify: `npm run check`
 
 ### T07 Switch register.tsx to the plan tool, tree pane and status line
-- status: todo
+- status: done (#9, 2026-10-05)
 - needs: T03, T04, T06
 - size: M
 - scope: Rewrite the wiring in register.tsx: session.start `$.tool.register` (store the returned name in `planTool`; a failure is logged and leaves it null) and `$.command.register('todo')`; `tool.describe` pins `isDeferred: false` on the plan tool (required, T01 Q2); no `tool.check` allow for the plan tool, because the tool.call hook answers before any check (T01 Q4); `tool.call` on the plan tool (main loop: parse, reducer, `formatForModel`; a subagent gets a "plan is owned by the main session" result); prompt.compose adds the section and sets `planTool.offered` = the name is in `e.tools` AND the pin was applied (`e.tools` also lists deferred tools); prompt.submit attaches `planContext` when a plan exists; turn.start runs the task lifecycle; `ui.render` Pane draws `buildTree` (columns 48, rows 20); `ui.status`; `/todo` handles only open and clear. Tests stub registration and call by the literal name `mcp__todo-list__plan`. Remove the old TodoWrite/Task* hooks, nudge, manual subcommands and their register.test.ts cases. todos.ts stays on disk, unused.
@@ -163,6 +163,8 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 
 ## Backlog
 - T03: confirm in T07/T13 that a 3-level nested inputSchema is accepted for a plugin tool
+- T07: tree.ts still uses local phaseLabel; swap to activity.ts activityLabel in T09
+- T07: task/planTool atom wiring not asserted in register.test.ts (test $ cannot read atoms)
 - Suppress the engine's `todo_reminder` attachment while the plan tool is active (prompt.attachment, vendor d.ts 4056-4066).
 - Read-only Bash allowlist (ls, git status, git diff) before a plan exists; needs safe command parsing.
 - Map classic.Notification `notification_type` values to activity states once T01 has observed them.
@@ -178,3 +180,4 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 2026-10-05 T04 #6 tree renderer and status line
 2026-10-05 T06 #8 gate decision, task lifecycle and prompt texts
 2026-10-05 T03 #7 plan tool schema, parser and model-facing text
+2026-10-05 T07 #9 plan tool, tree pane and status line live (3-level schema confirmed)

@@ -1,4 +1,5 @@
 node_modules/
 .claude/worktrees/
 .claude/skills/todo-list/.claude-plugin/types/
+.claude/skills/todo-list/tsconfig.json
 *.log
