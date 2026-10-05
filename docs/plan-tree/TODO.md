@@ -2,7 +2,7 @@
 
 ultraplan: plan-tree | branch: feat/plan-tree | base: main | tag: pre-plan-tree-main | created: 2026-10-05
 Status: ACTIVE
-Progress: 1/14 done
+Progress: 2/14 done
 
 ## Goal
 With the plugin loaded, every prompt that leads to tool use gets a plan tree that Claude writes through the plugin's own `mcp__todo-list__plan` tool. That tree is the only record of progress. A pane and status line draw it as a box-drawing tree with per-node status (Completed, In progress, Pending, Blocked, Skipped). They also show what Claude is doing now: working, running a tool, waiting for permission, waiting for your answer, compacting, interrupted, error, and how many subagents are running. State-changing tools are blocked until a plan exists. Enforcement fails open and the user can switch it off.
@@ -48,7 +48,7 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - verify: `claude --plugin-dir .claude/skills/todo-list --debug` on the spike branch following the Q1-Q10 script in plan.md; then on feat/plan-tree `git diff --stat main` shows only docs/plan-tree/*; `npm run check`
 
 ### T02 Add the plan data model, reducers and new atoms
-- status: todo
+- status: done (#4, 2026-10-05)
 - needs: T01
 - size: M
 - scope: Add new atoms inline in types/index.d.ts next to the old ones (old atoms stay until T11): `plan` { title; nodes: Array<{ id, parentId: string | null, title, activeForm?, status, note?, source: 'plan' | 'todo' | 'task', externalId?, updatedAt }> }, `task` { open, planned, denies }, `activity` { phase, tool?, detail?, subagents: string[], since }, `enforceSession` boolean, `planTool` { name: string | null; offered: boolean }; export matching named types. Add `hooks/sanitize.ts` holding `clean()` with its test ported. Add `hooks/plan.ts` with pure ops `setPlan`, `addNodes`, `updateNodes`, `removeNode`, `rollup`, `progress` (counts leaves), `currentNode`, `hasUnfinished`, enforcing depth 3, 60 nodes, title 120 chars, note 200 chars. Every op returns `{ plan } | { error }` and never throws.
@@ -166,8 +166,10 @@ With the plugin loaded, every prompt that leads to tool use gets a plan tree tha
 - Read-only Bash allowlist (ls, git status, git diff) before a plan exists; needs safe command parsing.
 - Map classic.Notification `notification_type` values to activity states once T01 has observed them.
 - Update the "Current mods" line for todo-list in the parent `claude-mods/CLAUDE.md` (outside this repo).
+- T02 follow-ups: `Plan` carries an extra `issued` counter list (not in the T02 scope text) so removed ids are never reused; T03 to T08 must pass the whole `Plan` through and use `emptyPlan()`. Parent rollup is: in_progress > blocked > all completed/skipped = completed > some done = in_progress > pending. `progress` counts skipped leaves as done; `hasUnfinished` treats blocked leaves as unfinished. Confirm both in T04/T06.
 - Persist the plan across `/clear` or resume via `$.store` if the owner wants that.
 
 ## Log
 2026-10-05 T01 #2 spike answered Q1-Q10 (10 observed, 0 unobserved; sub-points unobserved listed in spike.md)
 2026-10-05 amend spike corrections applied to D7, D10, T03, T05-T10, T13 (owner approved)
+2026-10-05 T02 #4 plan model, reducers and new atoms
