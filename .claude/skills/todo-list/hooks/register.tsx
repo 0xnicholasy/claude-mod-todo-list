@@ -267,6 +267,16 @@ async function mirror($: EngineInterface, name: string, apply: (cur: Plan, now: 
   await refreshStatus($)
 }
 
+// Loads the colour saved by `/todo color` into the atom. A store error or a bad value keeps the
+// default. Atoms reset on /clear after session.end and no session.start fires for it, so the first
+// turn.start after a /clear calls this too.
+async function loadSavedAccent($: EngineInterface): Promise<void> {
+  await guard($, 'accent load', undefined, async () => {
+    const saved = validAccent(await $.store.get(ACCENT_STORE_KEY))
+    if (saved !== null) await update($, accentOverride, () => saved)
+  })
+}
+
 export const register: Register = (on, options) => {
   // A missing value counts as on (D8).
   const enforceConfig = options.enforce !== false
@@ -275,10 +285,7 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     // Load the colour saved by `/todo color`. A store error or a bad value keeps the default.
-    await guard($, 'accent load', undefined, async () => {
-      const saved = validAccent(await $.store.get(ACCENT_STORE_KEY))
-      if (saved !== null) await update($, accentOverride, () => saved)
-    })
+    await loadSavedAccent($)
     await guard($, 'session.start', undefined, async () => {
       try {
         const registered = await $.tool.register({
@@ -525,6 +532,7 @@ export const register: Register = (on, options) => {
 
   // turn.start fires once per prompt of the main loop and not for subagents (T01 Q7).
   on('turn.start', async ($, e, next) => {
+    if ((await read($, accentOverride)) === null) await loadSavedAccent($)
     await guard($, 'turn.start', undefined, async () => {
       const current = await read($, plan)
       await update($, task, t => onNewPrompt(t, current, e.text))

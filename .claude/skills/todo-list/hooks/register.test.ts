@@ -109,6 +109,7 @@ test('prompt.submit attaches the plan as context, and nothing for an empty plan'
 test('turn.start runs the task lifecycle without a guard failure', async ($, on) => {
   const { logs } = setup(on)
   on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
+  on('store.get', async () => ({ value: undefined }))
   await $.tool.call(SET)
   await $.turn.start({ text: 'next prompt', turnId: 't1' })
   expect(logs).toEqual([])
@@ -894,5 +895,16 @@ test('a failing store write keeps the session color and says it is session only'
   await $.tool.call(STARTED)
   const set = await $.command.run(todo('color magenta'))
   expect(set.text).toContain('this session only')
+  expect(await drawPane($)).toContain('"color":"magenta"')
+})
+
+test('a saved accent is reapplied at the first turn after /clear resets the atoms', async ($, on) => {
+  setup(on)
+  fakeStore(on, { accentColor: 'magenta' })
+  on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
+  await $.tool.call(SET)
+  await $.tool.call(STARTED)
+  expect(await drawPane($)).toContain(DEFAULT_COLOR)
+  await $.turn.start({ text: 'go', turnId: 't1' })
   expect(await drawPane($)).toContain('"color":"magenta"')
 })
