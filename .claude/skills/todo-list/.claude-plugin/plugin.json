@@ -1,6 +1,6 @@
 {
   "name": "todo-list",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Plan trees written by Claude through a plan tool, shown in a pane and status line with live activity.",
   "types": "./types/index.d.ts",
   "userConfig": {
@@ -13,8 +13,8 @@
     "accentColor": {
       "type": "string",
       "title": "Accent color",
-      "description": "Theme key or color for the current step, progress bar and running state (for example cyan, magenta, green, #c084fc)",
-      "default": "cyan"
+      "description": "Theme key or color for the current step, progress bar and running state (for example claude, magenta, green, #c084fc)",
+      "default": "claude"
     }
   }
 }

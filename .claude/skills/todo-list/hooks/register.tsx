@@ -21,7 +21,8 @@ import {
   touchesPlan,
 } from './plan-tool'
 import { clean } from './sanitize'
-import { buildTree, DEFAULT_ACCENT, DEFAULT_WIDTH, paneRows, statusLine } from './tree'
+import { ACCENT_STORE_KEY, resolveAccent, validAccent } from './accent'
+import { buildTree, DEFAULT_WIDTH, paneRows, statusLine } from './tree'
 
 // D4: the registered name is `mcp__<plugin>__<name>`, confirmed by the T01 spike (Q1).
 const PLAN_TOOL_FULL_NAME = `mcp__todo-list__${PLAN_TOOL_SHORT_NAME}`
@@ -34,7 +35,8 @@ const DOCK_MIN_COLUMNS = 110
 const LOG_LIMIT = 4000
 const ASK_TOOL = 'AskUserQuestion'
 const USAGE = 'Usage: /todo (opens the pane) | /todo clear | /todo off | /todo on | /todo color <name|#hex|reset>'
-const ACCENT_PATTERN = /^(#[0-9a-fA-F]{6}|[a-zA-Z]{1,24})$/
+const unknownColorText = (value: string): string =>
+  `Unknown color "${value}". Use a name (red, green, yellow, blue, magenta, cyan, white, gray, claude, or a ...Bright variant) or #rrggbb. For orange, try claude.`
 const NOT_OWNER_TEXT =
   'Error: the plan is owned by the main session. Subagents cannot change it; report your progress in your result instead.'
 
@@ -45,7 +47,8 @@ const activity = atom({ plugin: 'todo-list', key: 'activity' } as const, emptyAc
 // D8: the session half of the enforcement switch; `/todo on|off` flips it. The other half is the
 // plugin option `enforce`.
 const enforceSession = atom({ plugin: 'todo-list', key: 'enforceSession' } as const, true as boolean)
-// The session accent set by `/todo color`; null defers to the plugin option `accentColor`.
+// The accent set by `/todo color`, loaded from the plugin store at session start so it applies to
+// every session; null defers to the plugin option `accentColor`.
 const accentOverride = atom({ plugin: 'todo-list', key: 'accentOverride' } as const, null as string | null)
 const planTool = atom({ plugin: 'todo-list', key: 'planTool' } as const, {
   name: null,
@@ -135,13 +138,29 @@ async function runTodoCommand(
     const value = raw.slice('color'.length).trim()
     if (value.toLowerCase() === 'reset') {
       await update($, accentOverride, () => null)
+      try {
+        await $.store.delete(ACCENT_STORE_KEY)
+      } catch (error) {
+        $.ui.log(`todo-list: accent store delete failed ${String(error)}`, { to: 'debug' })
 
-      return { text: 'Accent color reset.' }
+        return { text: 'Accent color reset for this session only; the saved color could not be cleared.' }
+      }
+
+      return { text: 'Accent color reset. The saved color is cleared for future sessions.' }
     }
-    if (!ACCENT_PATTERN.test(value)) return { text: USAGE }
-    await update($, accentOverride, () => value)
+    if (value === '') return { text: USAGE }
+    const accent = validAccent(value)
+    if (accent === null) return { text: unknownColorText(value) }
+    await update($, accentOverride, () => accent)
+    try {
+      await $.store.set(ACCENT_STORE_KEY, accent)
+    } catch (error) {
+      $.ui.log(`todo-list: accent store write failed ${String(error)}`, { to: 'debug' })
 
-    return { text: `Accent color set to ${value}.` }
+      return { text: `Accent color set to ${accent} for this session only; it could not be saved.` }
+    }
+
+    return { text: `Accent color set to ${accent}. Saved for future sessions.` }
   }
   if (word === '') {
     await openPane($, true)
@@ -251,11 +270,15 @@ async function mirror($: EngineInterface, name: string, apply: (cur: Plan, now: 
 export const register: Register = (on, options) => {
   // A missing value counts as on (D8).
   const enforceConfig = options.enforce !== false
-  // Effective accent = session override ?? plugin option ?? cyan.
-  const accentConfig =
-    typeof options.accentColor === 'string' && ACCENT_PATTERN.test(options.accentColor) ? options.accentColor : DEFAULT_ACCENT
+  // Effective accent = saved `/todo color` (accentOverride) ?? plugin option ?? default; see resolveAccent.
+  const accentConfig = resolveAccent(null, options.accentColor)
 
   on('session.start', async ($, e, next) => {
+    // Load the colour saved by `/todo color`. A store error or a bad value keeps the default.
+    await guard($, 'accent load', undefined, async () => {
+      const saved = validAccent(await $.store.get(ACCENT_STORE_KEY))
+      if (saved !== null) await update($, accentOverride, () => saved)
+    })
     await guard($, 'session.start', undefined, async () => {
       try {
         const registered = await $.tool.register({

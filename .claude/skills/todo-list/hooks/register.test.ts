@@ -1,11 +1,13 @@
 import type { CommandRunInput, EngineInterface, On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
+import { DEFAULT_ACCENT } from './tree'
 
 // The plan tool is called by its literal name: $.tool.register is not available under
 // `claude plugin test` (T01 Q9), and the hooks match this name whether or not registration ran.
 // The test engine `$` has no `state`, and a test hook may not read the plugin's atoms, so every
 // assertion goes through what the hooks return, the status line and the pane.
+const DEFAULT_COLOR = `"color":"${DEFAULT_ACCENT}"`
 const TOOL = 'mcp__todo-list__plan' as const
 const INSTRUCTION_ID = 'todo-list:plan'
 const USER = { kind: 'composer' } as const
@@ -649,31 +651,51 @@ const STARTED = { tool: TOOL, op: 'update', updates: [{ id: '1.1', status: 'in_p
 
 test('/todo color sets a session accent that the pane uses, and /todo color reset clears it', async ($, on) => {
   setup(on)
+  fakeStore(on)
   await $.tool.call(SET)
   await $.tool.call(STARTED)
-  expect(await drawPane($)).toContain('"color":"cyan"')
+  expect(await drawPane($)).toContain(DEFAULT_COLOR)
   const set = await $.command.run(todo('color magenta'))
-  expect(set.text).toBe('Accent color set to magenta.')
+  expect(set.text).toBe('Accent color set to magenta. Saved for future sessions.')
   const magenta = await drawPane($)
   expect(magenta).toContain('"color":"magenta"')
-  expect(magenta).not.toContain('"color":"cyan"')
+  expect(magenta).not.toContain(DEFAULT_COLOR)
   const hex = await $.command.run(todo('color #c084fc'))
-  expect(hex.text).toBe('Accent color set to #c084fc.')
+  expect(hex.text).toBe('Accent color set to #c084fc. Saved for future sessions.')
   expect(await drawPane($)).toContain('"color":"#c084fc"')
   const reset = await $.command.run(todo('color reset'))
-  expect(reset.text).toBe('Accent color reset.')
-  expect(await drawPane($)).toContain('"color":"cyan"')
+  expect(reset.text).toBe('Accent color reset. The saved color is cleared for future sessions.')
+  expect(await drawPane($)).toContain(DEFAULT_COLOR)
 })
 
-test('/todo color rejects a bad value and keeps the accent', async ($, on) => {
+test('/todo color with no value shows usage and keeps the accent', async ($, on) => {
   setup(on)
   await $.tool.call(SET)
   await $.tool.call(STARTED)
-  for (const bad of ['color', 'color #12', 'color two words', 'color red;rm', 'color #gggggg']) {
-    expect((await $.command.run(todo(bad))).text).toContain('Usage: /todo')
+  expect((await $.command.run(todo('color'))).text).toContain('Usage: /todo')
+  expect(await drawPane($)).toContain(DEFAULT_COLOR)
+})
+
+test('/todo color orange is rejected as unknown and keeps the accent', async ($, on) => {
+  setup(on)
+  await $.tool.call(SET)
+  await $.tool.call(STARTED)
+  for (const bad of ['orange', '#12', 'two words', 'red;rm', '#gggggg']) {
+    expect((await $.command.run(todo(`color ${bad}`))).text).toContain(`Unknown color "${bad}"`)
   }
+  expect((await $.command.run(todo('color orange'))).text).toContain('For orange, try claude.')
   const out = await drawPane($)
-  expect(out).toContain('"color":"cyan"')
+  expect(out).toContain(DEFAULT_COLOR)
+  expect(out).not.toContain('"color":"orange"')
+})
+
+test('/todo color stores the canonical spelling', async ($, on) => {
+  setup(on)
+  fakeStore(on)
+  await $.tool.call(SET)
+  await $.tool.call(STARTED)
+  expect((await $.command.run(todo('color RedBright'))).text).toBe('Accent color set to redBright. Saved for future sessions.')
+  expect(await drawPane($)).toContain('"color":"redBright"')
 })
 
 test('the accentColor plugin option is the accent, and a session override wins over it', { options: { accentColor: 'green' } }, async ($, on) => {
@@ -682,19 +704,19 @@ test('the accentColor plugin option is the accent, and a session override wins o
   await $.tool.call(STARTED)
   const configured = await drawPane($)
   expect(configured).toContain('"color":"green"')
-  expect(configured).not.toContain('"color":"cyan"')
+  expect(configured).not.toContain(DEFAULT_COLOR)
   await $.command.run(todo('color magenta'))
   expect(await drawPane($)).toContain('"color":"magenta"')
   await $.command.run(todo('color reset'))
   expect(await drawPane($)).toContain('"color":"green"')
 })
 
-test('an invalid accentColor plugin option falls back to cyan', { options: { accentColor: 'red;rm' } }, async ($, on) => {
+test('an invalid accentColor plugin option falls back to the default', { options: { accentColor: 'red;rm' } }, async ($, on) => {
   setup(on)
   await $.tool.call(SET)
   await $.tool.call(STARTED)
   const out = await drawPane($)
-  expect(out).toContain('"color":"cyan"')
+  expect(out).toContain(DEFAULT_COLOR)
   expect(out).not.toContain('red;rm')
 })
 
@@ -782,4 +804,68 @@ test('a viewport change to 80 columns closes nothing and keeps the pane open', a
   await drawAt($, 80, 20)
   await drawAt($, 46, 45)
   expect(calls).toEqual([])
+})
+
+// An in-memory $.store that records writes; mock.store cannot be combined with a spy hook.
+const fakeStore = (on: On, entries: Record<string, string> = {}): string[] => {
+  const writes: string[] = []
+  on('store.get', async (_$, e) => ({ value: entries[e.key] }))
+  on('store.set', async (_$, e) => {
+    entries[e.key] = String(e.value)
+    writes.push(`set ${e.key}=${String(e.value)}`)
+
+    return { value: undefined }
+  })
+  on('store.delete', async (_$, e) => {
+    delete entries[e.key]
+    writes.push(`delete ${e.key}`)
+
+    return { value: undefined }
+  })
+
+  return writes
+}
+const startSession = async ($: Engine, on: On): Promise<void> => {
+  on('session.start', async (_$, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', isInteractive: false, surface: 'terminal' })
+}
+
+test('/todo color is saved to the store and /todo color reset deletes it', async ($, on) => {
+  setup(on)
+  const writes = fakeStore(on)
+  const set = await $.command.run(todo('color magenta'))
+  expect(set.text).toContain('Saved for future sessions')
+  const reset = await $.command.run(todo('color reset'))
+  expect(reset.text).toContain('cleared for future sessions')
+  expect(writes).toEqual(['set accentColor=magenta', 'delete accentColor'])
+})
+
+test('a saved accent is applied at session start and beats the plugin option', { options: { accentColor: 'green' } }, async ($, on) => {
+  setup(on)
+  fakeStore(on, { accentColor: 'magenta' })
+  await startSession($, on)
+  await $.tool.call(SET)
+  await $.tool.call(STARTED)
+  expect(await drawPane($)).toContain('"color":"magenta"')
+})
+
+test('an invalid saved accent is ignored at session start', { options: { accentColor: 'green' } }, async ($, on) => {
+  setup(on)
+  fakeStore(on, { accentColor: 'red;rm' })
+  await startSession($, on)
+  await $.tool.call(SET)
+  await $.tool.call(STARTED)
+  expect(await drawPane($)).toContain('"color":"green"')
+})
+
+test('a failing store write keeps the session color and says it is session only', async ($, on) => {
+  setup(on)
+  on('store.set', async () => {
+    throw new Error('disk full')
+  })
+  await $.tool.call(SET)
+  await $.tool.call(STARTED)
+  const set = await $.command.run(todo('color magenta'))
+  expect(set.text).toContain('this session only')
+  expect(await drawPane($)).toContain('"color":"magenta"')
 })

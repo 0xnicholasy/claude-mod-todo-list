@@ -18,7 +18,7 @@ export const GLYPHS = {
 } as const
 
 export const DEFAULT_WIDTH = 56
-export const DEFAULT_ACCENT = 'cyan'
+export const DEFAULT_ACCENT = 'claude'
 const STATUS_TITLE_MAX = 30
 // Below this width the pane drops the percentage, right-aligned counts and long notes.
 export const NARROW_WIDTH = 50

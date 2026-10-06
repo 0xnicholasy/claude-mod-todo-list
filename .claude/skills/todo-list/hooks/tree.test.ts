@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { ActivityState, Plan, PlanNode, PlanStatus } from '../types'
 import type { Seg, TreeLine } from './tree'
-import { buildTree, GLYPHS, paneRows, preferredRows, statusLine } from './tree'
+import { buildTree, DEFAULT_ACCENT, GLYPHS, paneRows, preferredRows, statusLine } from './tree'
 
 const node = (id: string, status: PlanStatus, extra: Partial<PlanNode> = {}): PlanNode => {
   const parts = id.split('.')
@@ -69,9 +69,9 @@ test('buildTree draws exact lines for a 2-level fixture at width 56', () => {
 test('the current row has an accent, bold title and a dim marker, with no inverse or background', () => {
   const lines = buildTree(twoLevel, idle, { maxLines: 20 })
   const row = find(lines, '2.2 T2.2')
-  expect(segOf(row, 'T2.2')).toMatchObject({ color: 'cyan', bold: true, dim: false })
+  expect(segOf(row, 'T2.2')).toMatchObject({ color: DEFAULT_ACCENT, bold: true, dim: false })
   expect(segOf(row, '◂')).toMatchObject({ dim: true })
-  expect(segOf(row, '◉')).toMatchObject({ color: 'cyan' })
+  expect(segOf(row, '◉')).toMatchObject({ color: DEFAULT_ACCENT })
   for (const line of lines) {
     for (const s of line.segments) {
       expect('inverse' in s).toBe(false)
@@ -143,7 +143,7 @@ test('a tiny width never produces a negative pad or a throw, and counts keep one
 test('the progress bar uses a filled accent run and a dim track', () => {
   const lines = buildTree(twoLevel, idle, { maxLines: 20, width: 56 })
   const bar = lines[1]
-  expect(bar?.segments[0]).toMatchObject({ text: '━'.repeat(20), color: 'cyan' })
+  expect(bar?.segments[0]).toMatchObject({ text: '━'.repeat(20), color: DEFAULT_ACCENT })
   expect(bar?.segments[1]).toMatchObject({ text: '─'.repeat(20), dim: true })
   expect(bar?.segments[3]).toMatchObject({ text: '3/6 · 50%', dim: true })
   expect(lines[0]?.segments[0]).toMatchObject({ bold: true })
@@ -157,8 +157,8 @@ test('a custom accent colours the current row and the bar', () => {
   expect(segOf(find(lines, '2.2 T2.2'), 'T2.2')).toMatchObject({ color: 'magenta', bold: true })
   expect(segOf(find(lines, '2.2 T2.2'), '◉')).toMatchObject({ color: 'magenta' })
   expect(lines[2]?.segments[0]).toMatchObject({ color: 'magenta' })
-  const cyanLeak = lines.some(l => l.segments.some(s => s.color === 'cyan'))
-  expect(cyanLeak).toBe(false)
+  const defaultLeak = lines.some(l => l.segments.some(s => s.color === DEFAULT_ACCENT))
+  expect(defaultLeak).toBe(false)
 })
 
 test('the activity line is coloured by phase and omitted when idle', () => {
@@ -170,7 +170,7 @@ test('the activity line is coloured by phase and omitted when idle', () => {
   expect(style('error')).toMatchObject({ color: 'red' })
   expect(style('interrupted')).toMatchObject({ dim: true })
   expect(style('interrupted')?.color).toBeUndefined()
-  for (const phase of ['working', 'tool', 'compacting'] as const) expect(style(phase)).toMatchObject({ color: 'cyan' })
+  for (const phase of ['working', 'tool', 'compacting'] as const) expect(style(phase)).toMatchObject({ color: DEFAULT_ACCENT })
   expect(at('working', '#c084fc')[2]?.segments[0]).toMatchObject({ color: '#c084fc' })
   const quiet = texts(at('idle'))
   expect(quiet.slice(0, 3)).toEqual(['Add CSV', expect.stringContaining('3/6'), ''])
@@ -214,7 +214,7 @@ test('a current node 3 levels deep stays visible at maxLines 8 with a labelled +
 test('the first blocked leaf is highlighted when only blocked work is left', () => {
   const blocked = planOf(node('1', 'completed'), node('2', 'blocked', { note: 'wait' }), node('3', 'blocked'))
   const lines = buildTree(blocked, idle, { maxLines: 20 })
-  expect(segOf(find(lines, '2 T2'), 'T2')).toMatchObject({ bold: true, color: 'cyan' })
+  expect(segOf(find(lines, '2 T2'), 'T2')).toMatchObject({ bold: true, color: DEFAULT_ACCENT })
   expect(find(lines, '2 T2').text).toContain('◂')
   expect(find(lines, '3 T3').text).not.toContain('◂')
   expect(statusLine(blocked, idle)).toBe('Plan 1/3 · T2')
