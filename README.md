@@ -11,7 +11,7 @@ claude plugin marketplace add 0xnicholasy/claude-mod-todo-list
 claude plugin install todo-list@claude-mod-todo-list
 ```
 
-The repo is private, so `marketplace add` needs git access to it (gh auth or an SSH key).
+If you also run the mod from a checkout, the installed plugin takes precedence over a local copy with the same name `todo-list`, so uninstall it while developing.
 
 Set options at install with `--config`, for example `--config accentColor=#c084fc` or `--config enforce=false`. Add `-s project` to install for one project only. Scope values are `user`, `project` and `local`; the default is `user`.
 
@@ -25,6 +25,15 @@ claude plugin update todo-list@claude-mod-todo-list
 Uninstall with `claude plugin uninstall todo-list@claude-mod-todo-list`. Check what is installed with `claude plugin list`.
 
 ## Run from a checkout
+
+Clone the repo:
+
+```
+git clone https://github.com/0xnicholasy/claude-mod-todo-list.git
+cd claude-mod-todo-list
+```
+
+Then run:
 
 ```
 claude --plugin-dir .claude/skills/todo-list
