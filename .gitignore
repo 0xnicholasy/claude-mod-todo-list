@@ -3,3 +3,4 @@ node_modules/
 .claude/skills/todo-list/.claude-plugin/types/
 .claude/skills/todo-list/tsconfig.json
 *.log
+tasks/
