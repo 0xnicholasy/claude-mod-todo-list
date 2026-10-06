@@ -1,0 +1,14 @@
+{
+  "name": "claude-mod-todo-list",
+  "owner": {
+    "name": "0xnicholasy"
+  },
+  "description": "Todo List mod for Claude Code: plan trees in a pane and status line.",
+  "plugins": [
+    {
+      "name": "todo-list",
+      "source": "./.claude/skills/todo-list",
+      "description": "Plan trees written by Claude through a plan tool, shown in a pane and status line with live activity."
+    }
+  ]
+}

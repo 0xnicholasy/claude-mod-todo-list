@@ -2,7 +2,29 @@
 
 Todo List is a Claude Code mod. Every prompt that leads to tool use gets a plan tree. Claude writes the tree through the plugin's own tool, `mcp__todo-list__plan`, and that tree is the source of truth for progress. A pane and the status line draw it with per-node status and show what Claude is doing right now.
 
-## Run it
+## Install
+
+Install from GitHub:
+
+```
+claude plugin marketplace add 0xnicholasy/claude-mod-todo-list
+claude plugin install todo-list@claude-mod-todo-list
+```
+
+The repo is private, so `marketplace add` needs git access to it (gh auth or an SSH key).
+
+Set options at install with `--config`, for example `--config accentColor=#c084fc` or `--config enforce=false`. Add `-s project` to install for one project only. Scope values are `user`, `project` and `local`; the default is `user`.
+
+Update (restart required):
+
+```
+claude plugin marketplace update claude-mod-todo-list
+claude plugin update todo-list@claude-mod-todo-list
+```
+
+Uninstall with `claude plugin uninstall todo-list@claude-mod-todo-list`. Check what is installed with `claude plugin list`.
+
+## Run from a checkout
 
 ```
 claude --plugin-dir .claude/skills/todo-list
@@ -134,6 +156,7 @@ When the session offers `TaskCreate`, `TaskUpdate` or `TodoWrite`, successful ma
 - Under the RTK shell hook, run it as `rtk proxy npm run check`.
 - Mod path: `.claude/skills/todo-list/` (manifest `.claude-plugin/plugin.json`, hooks in `hooks/`, state contract in `types/index.d.ts`).
 - Hot reload: saving a file in the mod reloads the module in a running session. The plan survives, because state lives in `$.state` atoms and not in module variables. `/clear` resets the atoms.
+- Marketplace manifest is `.claude-plugin/marketplace.json`. Bump the version in `.claude/skills/todo-list/.claude-plugin/plugin.json` for releases.
 
 ## Known limits
 
