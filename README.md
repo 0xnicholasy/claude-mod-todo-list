@@ -1,6 +1,16 @@
-# claude-mod-todo-list
+# Todo List for Claude Code
 
-Todo List is a Claude Code mod. Every prompt that leads to tool use gets a plan tree. Claude writes the tree through the plugin's own tool, `mcp__todo-list__plan`, and that tree is the source of truth for progress. A pane and the status line draw it with per-node status and show what Claude is doing right now.
+`claude-mod-todo-list` is a Claude Code mod. Claude writes a plan tree for every task through the plugin's tool, `mcp__todo-list__plan`; a pane and the status line show progress and what Claude is doing right now; state-changing tools wait until a plan exists.
+
+![Todo List pane showing a plan tree with completed, running and blocked steps](docs/pane.png)
+
+## Features
+
+- **Plan tree tool.** Every prompt that leads to tool use gets a tree, written through `mcp__todo-list__plan`. It nests 3 levels and supports parallel groups.
+- **Live pane and status line.** Both draw the tree with per-node status and a progress bar.
+- **Live activity.** What Claude is doing comes from session events, not from Claude's own report.
+- **Plan-first enforcement.** Edit, Write, Bash and other state-changing tools are denied until a plan exists. It fails open.
+- **`/todo` commands and accent colour.** Reopen the pane, clear the plan, switch enforcement, set the accent colour (Claude orange by default, saved across sessions).
 
 ## Install
 
@@ -11,9 +21,9 @@ claude plugin marketplace add 0xnicholasy/claude-mod-todo-list
 claude plugin install todo-list@claude-mod-todo-list
 ```
 
-If you also run the mod from a checkout, the installed plugin takes precedence over a local copy with the same name `todo-list`, so uninstall it while developing.
-
 Set options at install with `--config`, for example `--config accentColor=#c084fc` or `--config enforce=false`. Add `-s project` to install for one project only. Scope values are `user`, `project` and `local`; the default is `user`.
+
+If you also run the mod from a checkout, the installed plugin takes precedence over a local copy with the same name `todo-list`, so uninstall it while developing.
 
 Update (restart required):
 
@@ -57,18 +67,20 @@ Add CSV export
 └─ ○ 4 Tests
 ```
 
-The first line is the plan title and the second is a progress bar with leaves done out of total leaves. Then comes the live activity, and the rest is the tree, with each node's id. Parent rows show their done/total count at the right edge of the pane. The current step is marked with `◂`; a parallel group shows `∥ parallel` after its title, and every running step in it has the accent colour and a bold title, but only the first carries `◂`. When the tree is too tall, the paths to all running steps stay visible and the rest is summarised as `+N more`.
+The first line is the plan title and the second is a progress bar with leaves done out of total leaves. Then comes the live activity, and the rest is the tree, with each node's id. Parent rows show their done/total count at the right edge of the pane. The current step is marked with `◂`. A parallel group shows `∥ parallel` after its title, and every running step in it has the accent colour and a bold title, but only the first carries `◂`. When the tree is too tall, the paths to all running steps stay visible and the rest is summarised as `+N more`.
 
-The accent colour (current step, running steps, progress bar) is cyan by default. Set a default with the `accentColor` option (a theme key or colour such as `magenta` or `#c084fc`); an invalid value falls back to cyan:
+The pane opens automatically at session start on an interactive terminal, and `/todo` reopens it. The status line shows a short form, for example `Plan 3/7 · Escaping quotes and commas · Running Bash`, and `Plan 2/7 · Header row +1 more running` while several steps run at once.
+
+The accent colour (current step, running steps, progress bar) is Claude orange by default (the `claude` theme key, which follows light and dark themes). `/todo color <name|#hex>` changes it and the choice is saved, so it applies to every session until `/todo color reset`. The `accentColor` option sets the default used when nothing is saved (a theme key or colour such as `magenta` or `#c084fc`); an invalid value falls back to Claude orange:
 
 ```
 claude --plugin-dir .claude/skills/todo-list \
   --settings '{"pluginConfigs":{"todo-list":{"options":{"accentColor":"#c084fc"}}}}'
 ```
 
-`/todo color <name|#hex|reset>` overrides it for the session. The status line shows `Plan 2/7 · Header row +1 more running` while several steps run at once. The pane opens automatically at session start on an interactive terminal, and `/todo` reopens it. The status line shows a short form, for example `Plan 3/7 · Escaping quotes and commas · Running Bash`.
+`/todo color <name|#hex|reset>` overrides it and is saved across sessions.
 
-### Layout: inline, docked, narrow
+## Layout
 
 Claude Code chooses where the pane goes, and a plugin cannot force it. The pane docks beside the transcript only in the fullscreen layout, from 110 columns. The main screen always shows it inline above the prompt; the plugin's own type declarations describe the main screen as "`CLAUDE_CODE_NO_FLICKER=0`, tmux by default". To get the fullscreen layout, set `CLAUDE_CODE_NO_FLICKER=1` (inferred from that note; the declarations name only the `=0` value). Under tmux, or on the main screen, expect the inline pane.
 
@@ -76,7 +88,7 @@ The pane asks for 56 columns when docked, and for as many rows as the tree needs
 
 Below 50 columns the pane compacts: a shorter bar, `done/total` with no percentage, the count placed after a parent's title instead of at the right edge, a bare `∥` for a parallel group, notes cut to 20 characters, and no subagent count on the activity line when it would not fit.
 
-### Node status
+## Node status
 
 | Glyph | Status | Meaning |
 |---|---|---|
@@ -88,7 +100,7 @@ Below 50 columns the pane compacts: a shorter bar, `done/total` with no percenta
 
 A parent takes its status from its children. Any child in progress makes the parent in progress. Otherwise any blocked child makes it blocked. If every child is completed or skipped, the parent is completed. If some are done and the rest are pending, it is in progress. Otherwise it is pending. Only leaves are set by hand through the tool.
 
-### Activity
+## Activity
 
 Activity comes from session events, not from Claude's own report.
 
@@ -148,7 +160,7 @@ Enforcement fails open. It also allows every call when the plan tool did not reg
 - `/todo clear`: empty the plan.
 - `/todo off`: turn enforcement off for this session.
 - `/todo on`: turn enforcement back on.
-- `/todo color <name|#hex|reset>`: set the accent colour for this session, or go back to the `accentColor` option (cyan by default).
+- `/todo color <name|#hex|reset>`: set the accent colour, saved for every session until you reset it; `reset` goes back to the `accentColor` option (Claude orange by default).
 
 ## TaskCreate and TaskUpdate mirroring
 
