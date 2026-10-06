@@ -47,6 +47,13 @@ test('permission during a tool shows permission; toolEnd returns to working', ()
   expect(reduceActivity(s, { type: 'toolEnd' }, 9).phase).toBe('working')
 })
 
+test('permissionEnd leaves permission for working and changes no other phase', () => {
+  const p = run([{ type: 'turnStart' }, { type: 'permissionAsk', tool: 'Bash' }])
+  expect(reduceActivity(p, { type: 'permissionEnd' }, 9).phase).toBe('working')
+  const t = run([{ type: 'turnStart' }, { type: 'toolStart', tool: 'Bash' }])
+  expect(reduceActivity(t, { type: 'permissionEnd' }, 9)).toBe(t)
+})
+
 test('question outranks permission, compacting and tool; questionClose returns to working', () => {
   const q = run([{ type: 'turnStart' }, { type: 'toolStart', tool: 'AskUserQuestion' }, { type: 'questionOpen' }])
   expect(q.phase).toBe('question')

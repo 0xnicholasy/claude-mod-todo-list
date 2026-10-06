@@ -407,20 +407,31 @@ export const register: Register = (on, options) => {
   // One catch-all tool.call hook only: the host refuses two without a matcher. It does two jobs
   // in this order. (1) The plan tool and subagent calls: the plan tool is answered right here
   // and never reaches the activity code, so the activity wrapper cannot swallow its answer;
-  // a subagent call goes straight to next(e). (2) Every other main-loop call is wrapped in
+  // a subagent call goes to next(e) and, once it ends, clears a permission label (its own ask
+  // may be the one shown) without touching a main-loop tool phase. (2) Every other main-loop call is wrapped in
   // activity start/end around next(e) and its result is returned untouched. This hook is
   // registered BEFORE the matcher hooks for TaskCreate/TaskUpdate/TodoWrite below (first
   // registered is outermost), so those mirrors run inside next(e), still see the real result,
   // and their results pass back out through this wrapper unchanged.
   on('tool.call', async ($, e, next) => {
-    const kind = await guard($, 'tool.call', 'skip' as 'skip' | 'plan' | 'tool' | 'question', async () => {
+    const kind = await guard($, 'tool.call', 'skip' as 'skip' | 'subagent' | 'plan' | 'tool' | 'question', async () => {
       const stored = (await read($, planTool)).name
       if (isPlanTool(e.tool, stored)) return 'plan'
-      if (e.agentId !== undefined) return 'skip'
+      if (e.agentId !== undefined) return 'subagent'
 
       return e.tool === ASK_TOOL ? 'question' : 'tool'
     })
     if (kind === 'skip') return next(e)
+    if (kind === 'subagent') {
+      try {
+        return await next(e)
+      } finally {
+        // Only redraws when a permission label is up, so an ordinary subagent call stays silent.
+        await guard($, 'subagent tool end', undefined, async () => {
+          if ((await read($, activity)).phase === 'permission') await applyActivity($, { type: 'permissionEnd' })
+        })
+      }
+    }
     if (kind === 'plan') {
       return guard($, 'plan tool', { result: 'Error: the plan tool failed. Try again.' }, () =>
         answerPlanCall($, e, e.agentId),

@@ -18,6 +18,7 @@ export type ActivityEvent =
   | { type: 'toolStart'; tool: string }
   | { type: 'toolEnd' }
   | { type: 'permissionAsk'; tool: string }
+  | { type: 'permissionEnd' }
   | { type: 'questionOpen' }
   | { type: 'questionClose' }
   | { type: 'compactStart' }
@@ -80,6 +81,9 @@ export const reduceActivity = (prev: ActivityState, event: ActivityEvent, now: n
       return prev.phase === 'tool' || prev.phase === 'permission' ? enter(prev, 'working', now) : prev
     case 'permissionAsk':
       return raise(prev, 'permission', now, clean(event.tool) || 'tool')
+    case 'permissionEnd':
+      // A subagent's call ended, so its dialog is over; it must not touch the main loop's tool phase.
+      return fallBack(prev, 'permission', now)
     case 'questionOpen':
       return enter(prev, 'question', now)
     case 'questionClose':

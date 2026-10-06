@@ -412,6 +412,33 @@ test('a subagent tool call does not show as Running', async ($, on) => {
   expect(statuses).toEqual([])
 })
 
+test('a subagent tool call ending clears its permission label but not a main-loop Running phase', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  on('tool.check', async () => ({ decision: 'ask' as const }))
+  stubBash(on)
+  const gate = pending()
+  on('tool.call', { tool: 'Read' }, async () => {
+    await gate.wait
+
+    return { result: 'ok' }
+  })
+  const sub: Parameters<typeof $.tool.call>[0] & { agentId: string } = { ...BASH, agentId: 'sub-1' }
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.tool.check({ tool: 'Bash', input: { command: 'ls' }, tool_use_id: 'tu1' })
+  expect(statuses.at(-1)).toBe('Waiting for permission: Bash')
+  await $.tool.call(sub)
+  expect(statuses.at(-1)).not.toContain('Waiting for permission')
+
+  // A main-loop tool still running is not ended by a subagent call finishing.
+  const main = $.tool.call({ tool: 'Read', file_path: '/x' })
+  await settle()
+  expect(statuses.at(-1)).toBe('Running Read')
+  await $.tool.call(sub)
+  expect(statuses.at(-1)).toBe('Running Read')
+  gate.release()
+  await main
+}) 
+
 test('compacting shows Compacting while next is pending, then resumes', async ($, on) => {
   const { statuses } = activitySetup(on)
   const gate = pending()
