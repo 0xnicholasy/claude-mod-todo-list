@@ -165,6 +165,26 @@ test('/todo with no args opens the pane', async ($, on) => {
   expect(opened).toEqual(['todo'])
 })
 
+test('the first prompt opens an unplaced pane once, and later prompts leave it closed', async ($, on) => {
+  setup(on)
+  on('session.start', async (_$, e) => ({ cwd: e.cwd }))
+  on('command.register', async () => ({ value: { command: 'todo' } }))
+  on('prompt.submit', async (_$, e) => ({ text: e.text, context: e.context }))
+  on('ui.panes', async () => ({ value: [{ id: 'todo', title: 'Plan', isShown: true, isFocused: false, isPlaced: false }] }))
+  const opened: string[] = []
+  on('ui.open', async (_$, e) => {
+    opened.push(e.id)
+
+    return { value: { isPlaced: false as const, reason: 'narrow' } }
+  })
+  await $.session.start({ cwd: '/tmp', isInteractive: true, surface: 'terminal' })
+  expect(opened).toEqual(['todo'])
+  await $.prompt.submit({ text: 'one', wait: false, origin: USER })
+  expect(opened).toEqual(['todo', 'todo'])
+  await $.prompt.submit({ text: 'two', wait: false, origin: USER })
+  expect(opened).toEqual(['todo', 'todo'])
+})
+
 test('/todo opens the pane with the dock width and a row count that fits the plan', async ($, on) => {
   setup(on)
   on('ui.panes', async () => ({ value: [] }))

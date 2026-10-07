@@ -1,6 +1,6 @@
 {
   "name": "todo-list",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Plan trees written by Claude through a plan tool, shown in a pane and status line with live activity.",
   "types": "./types/index.d.ts",
   "userConfig": {

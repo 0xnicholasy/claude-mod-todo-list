@@ -59,6 +59,11 @@ const planTool = atom({ plugin: 'todo-list', key: 'planTool' } as const, {
 // (state writes are refused while a render draws).
 const paneFit = atom({ plugin: 'todo-list', key: 'paneFit' } as const, null as PaneFit | null)
 
+// Whether the first prompt may still open the pane: 'armed' at an eligible session.start, 'done'
+// once the first prompt has had its one chance. Never re-armed, so a pane the person closes stays
+// closed. A /clear resets it to 'idle' and no session.start follows, so a cleared session does not re-open.
+const firstPromptOpen = atom({ plugin: 'todo-list', key: 'firstPromptOpen' } as const, 'idle' as 'idle' | 'armed' | 'done')
+
 const guard = async <T,>(
   $: EngineInterface,
   name: string,
@@ -310,8 +315,13 @@ export const register: Register = (on, options) => {
         description: 'Show the plan pane, clear the plan, or turn plan enforcement off or on',
         argumentHint: 'clear | off | on | color <name|#hex|reset>',
       })
-      // The pane opens unasked only on the terminal under a person at the prompt.
-      if (e.isInteractive && e.surface === 'terminal') await openPane($)
+      // The pane opens unasked only on the terminal under a person at the prompt. The host leaves
+      // an unasked open undrawn below 110 columns, so the first prompt (an open the person asked
+      // for, placed at any width) opens it again if it is still unplaced.
+      if (e.isInteractive && e.surface === 'terminal') {
+        await update($, firstPromptOpen, () => 'armed')
+        await openPane($)
+      }
     })
 
     return next(e)
@@ -520,6 +530,11 @@ export const register: Register = (on, options) => {
 
   // D12: the plan rides each new prompt as context, which also resyncs ids after a compaction.
   on('prompt.submit', async ($, e, next) => {
+    await guard($, 'first prompt open', undefined, async () => {
+      if ((await read($, firstPromptOpen)) !== 'armed') return
+      await update($, firstPromptOpen, () => 'done')
+      if (!(await $.ui.panes()).some(pane => pane.id === PANE && pane.isPlaced)) await openPane($)
+    })
     const context = await guard($, 'prompt.submit', undefined as string | undefined, async () => {
       const name = (await read($, planTool)).name ?? PLAN_TOOL_FULL_NAME
 

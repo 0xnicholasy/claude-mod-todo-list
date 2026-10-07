@@ -69,7 +69,7 @@ Add CSV export
 
 The first line is the plan title and the second is a progress bar with leaves done out of total leaves. Then comes the live activity, and the rest is the tree, with each node's id. Parent rows show their done/total count at the right edge of the pane. The current step is marked with `◂`. A parallel group shows `∥ parallel` after its title, and every running step in it has the accent colour and a bold title, but only the first carries `◂`. When the tree is too tall, the paths to all running steps stay visible and the rest is summarised as `+N more`.
 
-The pane opens automatically at session start on an interactive terminal, and `/todo` reopens it. The status line shows a short form, for example `Plan 3/7 · Escaping quotes and commas · Running Bash`, and `Plan 2/7 · Header row +1 more running` while several steps run at once.
+The pane opens at session start on an interactive terminal 110 columns or wider; on a narrower one the host holds an unasked pane undrawn, so it opens on your first prompt instead (once per session, so a pane you close stays closed). `/todo` reopens it. The status line shows a short form, for example `Plan 3/7 · Escaping quotes and commas · Running Bash`, and `Plan 2/7 · Header row +1 more running` while several steps run at once.
 
 The accent colour (current step, running steps, progress bar) is Claude orange by default (the `claude` theme key, which follows light and dark themes). `/todo color <name|#hex>` changes it and the choice is saved, so it applies to every session until `/todo color reset`. The `accentColor` option sets the default used when nothing is saved (a theme key or colour such as `magenta` or `#c084fc`); an invalid value falls back to Claude orange:
 
