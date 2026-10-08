@@ -126,7 +126,7 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 - verify: `rtk proxy npm run check`; `npm ci && npm run typecheck`
 
 ### T07 Wire tool_use_id so a parallel batch keeps "Running"
-- status: done (#PR, 2026-10-08)
+- status: done (#33, 2026-10-08)
 - needs: T06
 - size: M
 - scope:
@@ -178,4 +178,4 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 - 2026-10-08 T04 done: gate.ts gains a pure transition(cur, input) returning next, decision and toast; deny/pause counting matches runGate and is walked 0 through 5 in gate.test.ts (#30)
 - 2026-10-08 T05 done: an unknown-id TaskUpdate returns { ignored: IGNORED_UNKNOWN_TASK }; mirror() debug-logs it and skips onPlanTouched and the status refresh, so the gate stays closed and no toast fires (#31)
 - 2026-10-08 T06 done: reportDrop() toasts once per session ('Plan not updated: <fixed reason>') when a mirror is dropped or a response is not recognised; the once-flag is a CAS dropShown atom, reset on /clear (#32)
-- 2026-10-08 T07 done: tool_use_id now keys toolStart and toolEnd, so a parallel batch keeps Running until its last call ends; live check showed `Running Bash · 1 subagent`, then `Running Bash` after the Agent call and subagent ended, then `Working` once Bash ended (#PR)
+- 2026-10-08 T07 done: tool_use_id now keys toolStart and toolEnd, so a parallel batch keeps Running until its last call ends; live check showed `Running Bash · 1 subagent`, then `Running Bash` after the Agent call and subagent ended, then `Working` once Bash ended (#33)
