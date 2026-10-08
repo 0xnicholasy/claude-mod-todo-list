@@ -2,6 +2,20 @@
   "name": "todo-list",
   "version": "0.3.1",
   "description": "Plan trees written by Claude through a plan tool, shown in a pane and status line with live activity.",
+  "author": {
+    "name": "0xnicholasy",
+    "url": "https://github.com/0xnicholasy"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/0xnicholasy/claude-mod-todo-list",
+  "repository": "https://github.com/0xnicholasy/claude-mod-todo-list",
+  "keywords": [
+    "plan",
+    "todo",
+    "tasks",
+    "pane",
+    "status-line"
+  ],
   "types": "./types/index.d.ts",
   "userConfig": {
     "enforce": {
