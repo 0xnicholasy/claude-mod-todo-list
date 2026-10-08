@@ -22,11 +22,22 @@ const SET = {
 }
 const SHOW = { tool: TOOL, op: 'show' }
 
+// The tool_use_id the harness gave each main-loop call, oldest first. The end of a call is matched to
+// its start by this id, so a test ends a call with the id the harness assigned (see `finish`).
+let seenIds: string[] = []
+const lastId = (): string => seenIds.at(-1) ?? ''
+
 // The world beneath the mod: a clock, a log sink and a status recorder.
 const setup = (on: On): { logs: string[]; statuses: Array<string | undefined> } => {
   const logs: string[] = []
   const statuses: Array<string | undefined> = []
+  seenIds = []
   mock.clock(on)
+  on('tool.call', async (_$, e, next) => {
+    seenIds.push(e.tool_use_id)
+
+    return next(e)
+  })
   on('ui.log', async (_$, e, next) => {
     logs.push(e.text)
 
@@ -279,12 +290,13 @@ const finish = (
   input: Record<string, unknown>,
   response: unknown,
   agentId?: string,
+  toolUseId: string = lastId(),
 ): ReturnType<Engine['classic']['PostToolUse']> =>
   $.classic.PostToolUse({
     tool_name: name,
     tool_input: input,
     tool_response: response,
-    tool_use_id: 'tu1',
+    tool_use_id: toolUseId,
     ...(agentId !== undefined ? { agent_id: agentId } : {}),
   })
 
@@ -318,7 +330,7 @@ test('failed, subagent and unrecognised task calls change nothing', async ($, on
   stubTasks(on)
   await $.tool.call(CREATE)
   // A failed call raises PostToolUseFailure: the Running state ends and nothing is mirrored.
-  await $.classic.PostToolUseFailure({ tool_name: 'TaskCreate', tool_input: { subject: 'x' }, tool_use_id: 'tu1', error: 'boom' })
+  await $.classic.PostToolUseFailure({ tool_name: 'TaskCreate', tool_input: { subject: 'x' }, tool_use_id: lastId(), error: 'boom' })
   await finish($, 'TaskCreate', { subject: 'Write docs' }, CREATED, 'sub-1')
   await finish($, 'TaskCreate', { subject: 'Write docs' }, { task: {} })
   expect(statuses.filter(s => s?.includes('Plan'))).toEqual([])
@@ -411,7 +423,47 @@ test('a tool that fails still ends the running state', async ($, on) => {
   await $.turn.start({ text: 'go', turnId: 't1' })
   await $.tool.call(BASH)
   expect(statuses.at(-1)).toBe('Running Bash')
-  await $.classic.PostToolUseFailure({ tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: 'tu1', error: 'boom' })
+  await $.classic.PostToolUseFailure({ tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: lastId(), error: 'boom' })
+  expect(statuses.at(-1)).toBe('Working')
+})
+
+test('a parallel batch keeps Running until the last call ends, and an unknown id changes nothing', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  on('classic.PostToolUse', async () => ({}))
+  on('classic.PostToolUseFailure', async () => ({}))
+  on('tool.call', { tool: 'Bash' }, async () => ({ result: 'ok' }))
+  on('tool.call', { tool: 'Read' }, async () => ({ result: 'ok' }))
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.tool.call(BASH)
+  await $.tool.call({ tool: 'Read', file_path: '/x' })
+  const [bashId, readId] = seenIds
+  expect(bashId).toBeTruthy()
+  expect(readId).toBeTruthy()
+  expect(bashId).not.toBe(readId)
+  expect(statuses.at(-1)).toBe('Running Read')
+  // The first call ends; the second is still running.
+  await finish($, 'Bash', { command: 'ls' }, 'ok', undefined, bashId)
+  expect(statuses.at(-1)).toBe('Running Read')
+  // A failure for an id that never started leaves the status alone.
+  await $.classic.PostToolUseFailure({ tool_name: 'Read', tool_input: {}, tool_use_id: 'toolu_unknown', error: 'boom' })
+  expect(statuses.at(-1)).toBe('Running Read')
+  await finish($, 'Read', { file_path: '/x' }, 'ok', undefined, readId)
+  expect(statuses.at(-1)).toBe('Working')
+})
+
+test('a question closing during a running call falls back to that call, not to AskUserQuestion', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  on('classic.PostToolUse', async () => ({}))
+  on('tool.call', { tool: 'Bash' }, async () => ({ result: 'ok' }))
+  on('tool.call', { tool: 'AskUserQuestion' }, async () => ({ result: 'answered' }))
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.tool.call(BASH)
+  const bashId = lastId()
+  await $.tool.call({ tool: 'AskUserQuestion', questions: [] })
+  expect(statuses.at(-1)).toBe('Waiting for your answer')
+  await finish($, 'AskUserQuestion', { questions: [] }, 'answered')
+  expect(statuses.at(-1)).toBe('Running Bash')
+  await finish($, 'Bash', { command: 'ls' }, 'ok', undefined, bashId)
   expect(statuses.at(-1)).toBe('Working')
 })
 

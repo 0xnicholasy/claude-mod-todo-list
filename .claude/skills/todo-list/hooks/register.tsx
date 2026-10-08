@@ -316,10 +316,19 @@ async function mirror($: EngineInterface, name: string, apply: (cur: Plan, now: 
   await refreshStatus($)
 }
 
-// Ends the activity a finished call started. A subagent's call never started one; it only clears a
-// permission label (its own ask may be the one shown) and leaves a main-loop tool phase alone. The
-// plan tool never showed as Running.
-async function endTool($: EngineInterface, tool: string, agentId: string | undefined): Promise<void> {
+// The call id as the activity reducer should see it: a blank id is absent, so the name fallback applies.
+const presentId = (id: string | undefined): string | undefined => (id !== undefined && id.trim() !== '' ? id : undefined)
+
+// Ends the activity a finished call started, by its tool_use_id so a parallel batch keeps the calls
+// still running. A subagent's call never started one; it only clears a permission label (its own
+// ask may be the one shown) and leaves a main-loop tool phase alone. The plan tool never showed as
+// Running.
+async function endTool(
+  $: EngineInterface,
+  tool: string,
+  toolUseId: string | undefined,
+  agentId: string | undefined,
+): Promise<void> {
   if (isPlanTool(tool, (await read($, planTool)).name)) return
   if (agentId !== undefined) {
     // Only redraws when a permission label is up, so an ordinary subagent call stays silent.
@@ -327,7 +336,8 @@ async function endTool($: EngineInterface, tool: string, agentId: string | undef
 
     return
   }
-  await applyActivity($, tool === ASK_TOOL ? { type: 'questionClose' } : { type: 'toolEnd' })
+  const id = presentId(toolUseId)
+  await applyActivity($, tool === ASK_TOOL ? { type: 'questionClose' } : { type: 'toolEnd', tool, ...(id !== undefined ? { id } : {}) })
 }
 
 // A call finished: ends its activity, then mirrors a main-loop TaskCreate, TaskUpdate or TodoWrite
@@ -337,11 +347,12 @@ async function endTool($: EngineInterface, tool: string, agentId: string | undef
 async function afterTool(
   $: EngineInterface,
   tool: string,
+  toolUseId: string | undefined,
   input: unknown,
   response: unknown,
   agentId: string | undefined,
 ): Promise<void> {
-  await endTool($, tool, agentId)
+  await endTool($, tool, toolUseId, agentId)
   if (agentId !== undefined) return
   if (tool === 'TaskCreate') {
     const created = taskCreateFrom(input, response)
@@ -525,7 +536,10 @@ export const register: Register = (on, options) => {
       return { deny: 'Blocked: there is no plan for this task yet. Call mcp__todo-list__plan with {"op":"set","title":"<task>","nodes":[{"title":"<step>"}]} first, then retry the tool. If the tool is not loaded, load it first with ToolSearch (query "select:mcp__todo-list__plan").' }
     }
     // A denied call never shows as Running.
-    const open: ActivityEvent = kind === 'question' ? { type: 'questionOpen' } : { type: 'toolStart', tool: e.tool }
+    // AskUserQuestion only opens the question phase; it has no running entry to end.
+    const id = presentId(e.tool_use_id)
+    const open: ActivityEvent =
+      kind === 'question' ? { type: 'questionOpen' } : { type: 'toolStart', tool: e.tool, ...(id !== undefined ? { id } : {}) }
     await guard($, 'tool start', undefined, () => applyActivity($, open))
 
     return next(e)
@@ -545,14 +559,14 @@ export const register: Register = (on, options) => {
   // runs after the tool succeeded and changes nothing in what the model sees.
   on('classic.PostToolUse', async ($, e, next) => {
     await guard($, 'PostToolUse', undefined, () =>
-      afterTool($, e.tool_name, e.tool_input, e.tool_response, e.agent_id),
+      afterTool($, e.tool_name, e.tool_use_id, e.tool_input, e.tool_response, e.agent_id),
     )
 
     return next(e)
   })
 
   on('classic.PostToolUseFailure', async ($, e, next) => {
-    await guard($, 'PostToolUseFailure', undefined, () => endTool($, e.tool_name, e.agent_id))
+    await guard($, 'PostToolUseFailure', undefined, () => endTool($, e.tool_name, e.tool_use_id, e.agent_id))
 
     return next(e)
   })
