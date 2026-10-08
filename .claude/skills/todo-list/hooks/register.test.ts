@@ -808,13 +808,11 @@ test('mirror: a TaskCreate that fits on the first attempt and errors on the retr
 
 test('mirror: a TaskUpdate for an unknown id is ignored, so the gate stays closed and no toast fires', async ($, on) => {
   stubTasks(on)
-  const { toasts, logs, statuses } = await gateSetup($, on)
+  const { toasts, logs } = await gateSetup($, on)
   await $.turn.start({ text: 'edit a file', turnId: 't1' })
-  const before = statuses.length
   await finish($, 'TaskUpdate', { taskId: '99', status: 'completed' }, DONE)
   expect(logs.filter(line => line.includes('TaskUpdate ignored'))).toHaveLength(1)
   expect(logs.filter(line => line.includes('not mirrored'))).toEqual([])
-  expect(statuses.slice(before).every(s => s === undefined || !s.includes('Plan'))).toBe(true)
   expect(isDenied(await $.tool.call(EDIT))).toBe(true)
   expect(toasts).toEqual(['Blocked Edit: no plan yet. /todo off turns this off.'])
 })

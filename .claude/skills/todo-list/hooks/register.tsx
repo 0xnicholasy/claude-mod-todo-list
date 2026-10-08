@@ -10,7 +10,6 @@ import { decideGate, INSTRUCTION_ID, INSTRUCTION_TEXT, MAX_DENIES, onNewPrompt, 
 import { ingestTaskCreate, ingestTaskUpdate, ingestTodoWrite } from './ingest'
 import type { IngestResult } from './ingest'
 import { emptyPlan } from './plan'
-import type { PlanResult } from './plan'
 import type { PlanApplied } from './plan-tool'
 import {
   applyPlanOp,
