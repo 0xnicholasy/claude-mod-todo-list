@@ -130,6 +130,8 @@ A node may set `parallel: true` (on `set` or `add`). Its children may then be in
 
 When the session offers `TaskCreate`, `TaskUpdate` or `TodoWrite`, successful main-session calls are mirrored into the tree as top-level nodes and count as having a plan. The plan tool stays the preferred path. In Claude Code 2.1.289, `TodoWrite` does not exist and `TaskCreate` and `TaskUpdate` are not offered by default, so the plan tool is the only default path.
 
+A mirrored call the plugin cannot apply is dropped: the plan stays as it was, the detail goes to the debug log, and one toast per session says "Plan not updated" with a fixed reason (a limit was hit, or the tool response was not recognised). The toast never repeats the task text. A call that fails on one attempt and fits on a retry shows no toast, and a `/clear` re-arms the toast.
+
 ### Enforcement
 
 Until the current task has a plan, these main-session tools are denied: Edit, Write, NotebookEdit, Bash, Agent, Workflow, CronCreate, CronDelete, EnterWorktree, ExitWorktree and RemoteTrigger. The denial tells Claude the exact `set` call to make.

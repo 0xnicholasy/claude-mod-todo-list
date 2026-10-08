@@ -72,6 +72,7 @@ declare module 'claude-code' {
         since: number
       }
       enforceSession: boolean
+      dropShown: boolean
       accentOverride: string | null
       firstPromptOpen: 'idle' | 'armed' | 'done'
       planTool: { name: string | null; offered: boolean }
