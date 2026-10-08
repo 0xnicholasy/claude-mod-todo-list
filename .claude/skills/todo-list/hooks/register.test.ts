@@ -74,7 +74,7 @@ test('a subagent plan call changes nothing', async ($, on) => {
 })
 
 test('prompt.compose adds the plan section once, and only when the tool is offered', async ($, on) => {
-  const { logs } = setup(on)
+  const { logs, statuses } = setup(on)
   const base = { model: 'm', promptModel: 'm', surfaces: [], outputStyle: null, traits: [] }
   on('prompt.compose', async () => ({ sections: [] }))
   const withTool = await $.prompt.compose({ ...base, tools: ['Read', TOOL] })
@@ -616,7 +616,7 @@ const gateSetup = async (
   $: Engine,
   on: On,
   corrupt: Corrupt = { task: false, toast: false },
-): Promise<{ toasts: string[] }> => {
+): Promise<{ toasts: string[]; logs: string[]; statuses: Array<string | undefined> }> => {
   const toasts: string[] = []
   on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
   on('prompt.compose', async () => ({ sections: [] }))
@@ -638,11 +638,11 @@ const gateSetup = async (
   })
   on('tool.call', { tool: 'Edit' }, async () => ({ result: 'edited' }))
   on('tool.call', { tool: 'Read' }, async () => ({ result: 'read' }))
-  const { logs } = setup(on)
+  const { logs, statuses } = setup(on)
   const base = { model: 'm', promptModel: 'm', surfaces: [], outputStyle: null, traits: [] }
   await $.prompt.compose({ ...base, tools: ['Read', 'Edit', TOOL] })
 
-  return { toasts }
+  return { toasts, logs, statuses }
 }
 const EDIT = { tool: 'Edit', file_path: '/x', old_string: 'a', new_string: 'b' } as const
 const isDenied = (out: { deny?: string }): boolean => out.deny !== undefined
@@ -746,6 +746,64 @@ test('gate: a throwing toast does not change the deny', async ($, on) => {
   const denied = await $.tool.call(EDIT)
   expect(denied.deny).toContain(TOOL)
   expect(denied.result).toBeUndefined()
+})
+
+// A mirror whose first compare-and-set misses (T02). `update` retries a write that missed its
+// ifVersion, running the reducer again on the plan that beat it. The seam hooks the first write to
+// the plan atom after it is armed: it writes `swap(previous)` in its place and answers isSet false,
+// as if another PostToolUse had written first. The start plan holds `count` skipped leaves, so
+// the plan is finished and a new turn starts unplanned.
+const missSetup = async ($: Engine, on: On, count: number, swapTo: number): Promise<{ statuses: Array<string | undefined>; logs: string[] }> => {
+  const armed = { value: false }
+  stubTasks(on)
+  on('state.set', async (_$, e, next) => {
+    if (e.key !== 'plan' || !armed.value) return next(e)
+    armed.value = false
+    const prev = e.previous
+    if (prev === undefined) return next(e)
+    // Fewer nodes: a prefix of the stored plan. More: the stored plan plus copies of its first node.
+    const nodes = prev.nodes.slice(0, swapTo)
+    while (nodes.length < swapTo) nodes.push({ ...prev.nodes[0]!, id: `x${nodes.length}`, title: `filler ${nodes.length}` })
+    const { ifVersion: _dropped, ...unconditional } = e
+    const written = await next({ ...unconditional, value: { ...prev, nodes } })
+    if (written.value === undefined) return written
+
+    return { value: { isSet: false, version: written.value.version } }
+  })
+  // gateSetup sends the first event through `$`, so every hook above is registered before it.
+  const world = await gateSetup($, on)
+  const titles = Array.from({ length: count }, (_, i) => ({ title: `Step ${i + 1}` }))
+  await $.tool.call({ tool: TOOL, op: 'set', title: 'Big plan', nodes: titles })
+  const done = titles.map((_, i) => ({ id: String(i + 1), status: 'skipped' }))
+  await $.tool.call({ tool: TOOL, op: 'update', updates: done })
+  await $.turn.start({ text: 'edit a file', turnId: 't2' })
+  expect(isDenied(await $.tool.call(EDIT))).toBe(true)
+  world.logs.length = 0
+  world.statuses.length = 0
+  armed.value = true
+
+  return world
+}
+
+test('mirror: a TaskCreate that errors on the first attempt and fits on the retry is mirrored', async ($, on) => {
+  const { statuses, logs } = await missSetup($, on, 60, 30)
+  await $.tool.call(CREATE)
+  await finish($, 'TaskCreate', { subject: 'Write docs', activeForm: 'Writing docs' }, CREATED)
+  expect(String((await $.tool.call(SHOW)).result)).toContain('Write docs')
+  expect(statuses.at(-1)).toContain('Writing docs')
+  expect(logs.filter(line => line.includes('not mirrored'))).toEqual([])
+  const out = await $.tool.call(EDIT)
+  expect(out.deny).toBeUndefined()
+  expect(out.result).toBe('edited')
+})
+
+test('mirror: a TaskCreate that fits on the first attempt and errors on the retry stays unplanned', async ($, on) => {
+  const { logs } = await missSetup($, on, 59, 60)
+  await $.tool.call(CREATE)
+  await finish($, 'TaskCreate', { subject: 'Write docs', activeForm: 'Writing docs' }, CREATED)
+  expect(String((await $.tool.call(SHOW)).result)).not.toContain('Write docs')
+  expect(logs.filter(line => line.includes('not mirrored'))).toHaveLength(1)
+  expect(isDenied(await $.tool.call(EDIT))).toBe(true)
 })
 
 // Draws the pane and returns the element tree as JSON, so a test can look for a colour.

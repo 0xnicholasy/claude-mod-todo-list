@@ -2,7 +2,7 @@
 
 ultraplan: harden-concurrency | branch: feat/harden-concurrency | base: main | tag: pre-harden-concurrency-main | created: 2026-10-08
 Status: ACTIVE
-Progress: 1/9 done
+Progress: 2/9 done
 
 ## Goal
 The mod must behave correctly when Claude runs tool calls in parallel and when a write or a mirror fails. Specifically:
@@ -46,7 +46,7 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 - verify: `rtk proxy npm run check`; `npm ci && npm run typecheck`; mutation run: `rtk proxy npm run test` with the move applied (expect 1 failure), then `git diff --stat` shows only register.test.ts
 
 ### T02 Reset the mirror() outcome on every CAS attempt
-- status: todo
+- status: done (#PR, 2026-10-08)
 - needs: T01
 - size: S
 - scope: In `mirror()` (register.tsx:257-277), `let failure` is set on error and never cleared across `update` retries (vendor d.ts:13981-13987 retries on an ifVersion miss; concurrent PostToolUse is permitted, d.ts:7507). Replace it with an outcome that every reducer attempt reassigns whole, following the `applied` pattern in answerPlanCall (register.tsx:242-247). Add a register.test.ts seam: an `on('state.set', ...)` that, on the first write to key `plan` only, swaps in a different plan and returns `{ isSet: false, version }` to force one miss (StateSetResult, d.ts:11533-11539). Two cases:
@@ -166,3 +166,4 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 
 ## Log
 - 2026-10-08 T01 done: plan-tool failure path locked by a register.test.ts case; mutation check failed as expected (#26)
+- 2026-10-08 T02 done: mirror() reassigns its whole outcome on every CAS attempt; a forced-miss state.set seam covers error-then-success and success-then-error (#PR)
