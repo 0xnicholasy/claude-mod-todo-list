@@ -505,6 +505,35 @@ test('PermissionRequest alone shows Waiting for permission, repeating it is harm
   expect(statuses.at(-1)).toBe('Working')
 })
 
+test('PermissionDenied clears the permission label when no PostToolUse follows', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  on('classic.PermissionRequest', async () => ({}))
+  on('classic.PermissionDenied', async () => ({}))
+  stubBash(on)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.tool.call(BASH)
+  const bashId = lastId()
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
+  expect(statuses.at(-1)).toBe('Waiting for permission: Bash')
+  await $.classic.PermissionDenied({ tool_name: 'Bash', tool_input: {}, tool_use_id: bashId, reason: 'no' })
+  expect(statuses.at(-1)).toBe('Working')
+})
+
+test('PermissionDenied for one of two parallel calls keeps the other Running', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  on('classic.PermissionRequest', async () => ({}))
+  on('classic.PermissionDenied', async () => ({}))
+  stubBash(on)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.tool.call(BASH)
+  await $.tool.call(BASH)
+  const firstId = seenIds[0] ?? ''
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
+  expect(statuses.at(-1)).toBe('Waiting for permission: Bash')
+  await $.classic.PermissionDenied({ tool_name: 'Bash', tool_input: {}, tool_use_id: firstId, reason: 'no' })
+  expect(statuses.at(-1)).toBe('Running Bash')
+})
+
 test('AskUserQuestion shows Waiting for your answer until PostToolUse', async ($, on) => {
   const { statuses } = activitySetup(on)
   on('classic.PostToolUse', async () => ({}))

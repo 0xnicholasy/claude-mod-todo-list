@@ -468,6 +468,17 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // A denied permission never reaches PostToolUse, so this ends the call's activity and clears the
+  // permission label that would otherwise stay up for the rest of the turn.
+  on('classic.PermissionDenied', async ($, e, next) => {
+    await guard($, 'PermissionDenied', undefined, async () => {
+      await endTool($, e.tool_name, e.tool_use_id, e.agent_id)
+      if (e.agent_id === undefined) await applyActivity($, { type: 'permissionEnd' })
+    })
+
+    return next(e)
+  })
+
   on('classic.SubagentStart', async ($, e, next) => {
     await guard($, 'SubagentStart', undefined, () => applyActivity($, { type: 'subagentStart', id: e.agent_id }))
 
