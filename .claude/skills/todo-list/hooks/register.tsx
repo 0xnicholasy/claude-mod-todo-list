@@ -109,8 +109,13 @@ async function applyActivity($: EngineInterface, event: ActivityEvent): Promise<
   await refreshStatus($)
 }
 
+// A debug line must never stop what follows it (a toast, a gate decision), so a throwing log is swallowed.
 function debugLog($: EngineInterface, text: string): void {
-  $.ui.log(text.slice(0, LOG_LIMIT), { to: 'debug' })
+  try {
+    $.ui.log(text.slice(0, LOG_LIMIT), { to: 'debug' })
+  } catch {
+    // Logging must never throw out of a hook.
+  }
 }
 
 // Inline the pane is as tall as the tree wants (a short plan wastes no rows); docked it is
@@ -193,16 +198,16 @@ async function runTodoCommand(
   return { text: 'Plan cleared.' }
 }
 
-// A toast failure must never change the deny/allow outcome of the gate.
-function safeToast($: EngineInterface, text: string): void {
+// A toast failure must never change the deny/allow outcome of the gate. Answers whether it was shown.
+function safeToast($: EngineInterface, text: string): boolean {
   try {
     $.ui.toast(text)
+
+    return true
   } catch (error) {
-    try {
-      $.ui.log(`todo-list: toast threw ${String(error)}`, { to: 'debug' })
-    } catch {
-      // Logging must never throw out of a hook.
-    }
+    debugLog($, `todo-list: toast threw ${String(error)}`)
+
+    return false
   }
 }
 
@@ -234,7 +239,11 @@ async function runGate($: EngineInterface, tool: string, enforceConfig: boolean)
 
     return out.next
   })
-  if (out === undefined) return { kind: 'allow' }
+  if (out === undefined) {
+    debugLog($, `todo-list: gate reducer did not run, allowing ${tool}`)
+
+    return { kind: 'allow' }
+  }
   if (out.toast === 'deny') safeToast($, `Blocked ${tool}: no plan yet. /todo off turns this off.`)
   else if (out.toast === 'pause' && out.decision.kind === 'pause') safeToast($, out.decision.toast)
 
@@ -244,7 +253,7 @@ async function runGate($: EngineInterface, tool: string, enforceConfig: boolean)
 // Tells the person once per session that a task call was not mirrored. The reason is one of the
 // fixed DROPPED_* strings. Must run after the mirror's own update() has resolved, never inside a
 // reducer. `update` reruns the reducer when its write misses ifVersion, so `won` is reassigned on
-// every attempt and only the attempt that flipped false to true toasts.
+// every attempt and only the attempt that flipped false to true toasts. A claim whose toast failed is released.
 async function reportDrop($: EngineInterface, reason: string): Promise<void> {
   let won = false
   await update($, dropShown, cur => {
@@ -252,7 +261,8 @@ async function reportDrop($: EngineInterface, reason: string): Promise<void> {
 
     return true
   })
-  if (won) safeToast($, `Plan not updated: ${reason}`)
+  // A toast that did not show gives the claim back, so the next drop can still tell the person.
+  if (won && !safeToast($, `Plan not updated: ${reason}`)) await update($, dropShown, () => false)
 }
 
 // A tool response the narrowing does not know: logged with detail, and reported once.
@@ -309,13 +319,13 @@ async function mirror($: EngineInterface, name: string, apply: (cur: Plan, now: 
     return out.plan
   })
   if (outcome.kind === 'failed') {
-    $.ui.log(`todo-list: ${name} not mirrored: ${outcome.text}`, { to: 'debug' })
+    debugLog($, `todo-list: ${name} not mirrored: ${outcome.text}`)
     await reportDrop($, DROPPED_NOT_MIRRORED)
 
     return
   }
   if (outcome.kind === 'ignored') {
-    $.ui.log(`todo-list: ${name} ignored: ${outcome.text}`, { to: 'debug' })
+    debugLog($, `todo-list: ${name} ignored: ${outcome.text}`)
 
     return
   }

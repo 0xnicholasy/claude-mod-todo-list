@@ -84,11 +84,25 @@ const enterIdle = (prev: ActivityState, phase: ActivityPhase, now: number, detai
 const endedIndex = (running: ActivityState['running'], id: string | undefined, tool: string | undefined): number => {
   const byId = id ? running.findIndex(r => r.id === id) : -1
   if (byId >= 0 || !tool) return byId
+  const synthetic = running.findIndex(r => r.tool === tool && r.id === `name:${r.tool}`)
+  // An end hook without any id may belong to a real-id entry; an end carrying an unknown id never removes one.
+  if (synthetic >= 0 || id) return synthetic
 
-  return running.findIndex(r => r.tool === tool && r.id === `name:${r.tool}`)
+  return running.findIndex(r => r.tool === tool)
 }
 
-export const reduceActivity = (prev: ActivityState, event: ActivityEvent, now: number): ActivityState => {
+// An atom value from before a hot reload can lack `running` or `subagents`; treat those as empty.
+const normalize = (prev: ActivityState): ActivityState =>
+  Array.isArray(prev.running) && Array.isArray(prev.subagents)
+    ? prev
+    : {
+        ...prev,
+        running: Array.isArray(prev.running) ? prev.running : [],
+        subagents: Array.isArray(prev.subagents) ? prev.subagents : [],
+      }
+
+export const reduceActivity = (stored: ActivityState, event: ActivityEvent, now: number): ActivityState => {
+  const prev = normalize(stored)
   switch (event.type) {
     case 'turnStart':
       return enterIdle(prev, 'working', now)
@@ -117,7 +131,9 @@ export const reduceActivity = (prev: ActivityState, event: ActivityEvent, now: n
       if (!all && at < 0) return prev
       const running = all ? [] : prev.running.filter((_, i) => i !== at)
       if (prev.phase !== 'tool' && prev.phase !== 'permission') return { ...prev, running }
-      // A tool that ends while permission is shown means the dialog is over too.
+      // A permission wait belongs to the call that asked; another call ending must not hide it.
+      if (prev.phase === 'permission' && !all && running.some(r => r.tool === prev.tool)) return { ...prev, running }
+      // The asking call ending while permission is shown means the dialog is over too.
       return settle({ ...prev, running }, now)
     }
     case 'permissionAsk':

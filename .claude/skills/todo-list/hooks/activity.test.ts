@@ -208,8 +208,38 @@ test('the name fallback removes only the oldest synthetic entry of that tool', (
   expect(one.running.map(r => r.id)).toEqual(['b1', 'name:Bash'])
   const two = reduceActivity(one, { type: 'toolEnd', id: 'unknown', tool: 'Bash' }, 9)
   expect(two.running.map(r => r.id)).toEqual(['b1'])
-  // The id-bearing entry is never removed by name.
-  expect(reduceActivity(two, { type: 'toolEnd', tool: 'Bash' }, 9)).toBe(two)
+  // An end carrying an unknown id never removes an id-bearing entry by name.
+  expect(reduceActivity(two, { type: 'toolEnd', id: 'unknown', tool: 'Bash' }, 9)).toBe(two)
+})
+
+test('toolEnd with a tool but no id clears a real-id entry of that tool', () => {
+  const s = run([{ type: 'turnStart' }, { type: 'toolStart', tool: 'Bash', id: 'b1' }])
+  const ended = reduceActivity(s, { type: 'toolEnd', tool: 'Bash' }, 9)
+  expect(ended.running).toEqual([])
+  expect(ended.phase).toBe('working')
+})
+
+test('another call ending keeps a pending permission wait; the asking call ending settles it', () => {
+  const s = run([
+    { type: 'turnStart' },
+    { type: 'toolStart', tool: 'Write', id: 'a' },
+    { type: 'toolStart', tool: 'Read', id: 'b' },
+    { type: 'permissionAsk', tool: 'Write' },
+  ])
+  const other = reduceActivity(s, { type: 'toolEnd', id: 'b', tool: 'Read' }, 9)
+  expect(other.phase).toBe('permission')
+  expect(other.tool).toBe('Write')
+  expect(other.running).toEqual([{ id: 'a', tool: 'Write' }])
+  const own = reduceActivity(other, { type: 'toolEnd', id: 'a', tool: 'Write' }, 10)
+  expect(own.phase).toBe('working')
+})
+
+test('a stored activity value without running or subagents is treated as empty', () => {
+  const legacy = { phase: 'working', since: 0 } as unknown as ActivityState // pre-reload shape lacks the arrays
+  const started = reduceActivity(legacy, { type: 'toolStart', tool: 'Bash', id: 'a' }, 1)
+  expect(started.running).toEqual([{ id: 'a', tool: 'Bash' }])
+  expect(reduceActivity(legacy, { type: 'toolEnd', id: 'a' }, 1).phase).toBe('working')
+  expect(reduceActivity(legacy, { type: 'subagentStart', id: 's' }, 1).subagents).toEqual(['s'])
 })
 
 test('toolEnd with neither id nor tool clears every running call', () => {

@@ -451,6 +451,27 @@ test('a parallel batch keeps Running until the last call ends, and an unknown id
   expect(statuses.at(-1)).toBe('Working')
 })
 
+test('a parallel batch of the same tool keeps Running by id, so only id wiring at toolStart passes', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  on('classic.PostToolUse', async () => ({}))
+  on('classic.PostToolUseFailure', async () => ({}))
+  stubBash(on)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.tool.call(BASH)
+  await $.tool.call(BASH)
+  const [firstId, secondId] = seenIds
+  expect(firstId).toBeTruthy()
+  expect(secondId).toBeTruthy()
+  expect(firstId).not.toBe(secondId)
+  await finish($, 'Bash', { command: 'ls' }, 'ok', undefined, firstId)
+  expect(statuses.at(-1)).toBe('Running Bash')
+  // A failure for an id that never started must not end a Bash by its name.
+  await $.classic.PostToolUseFailure({ tool_name: 'Bash', tool_input: {}, tool_use_id: 'toolu_unknown', error: 'boom' })
+  expect(statuses.at(-1)).toBe('Running Bash')
+  await finish($, 'Bash', { command: 'ls' }, 'ok', undefined, secondId)
+  expect(statuses.at(-1)).toBe('Working')
+})
+
 test('a question closing during a running call falls back to that call, not to AskUserQuestion', async ($, on) => {
   const { statuses } = activitySetup(on)
   on('classic.PostToolUse', async () => ({}))
@@ -664,7 +685,7 @@ test('Notification is logged by type only, and the call result is unchanged', as
 // `claude plugin test` registration does not run, so each test first sends a prompt.compose that
 // lists the plan tool, which stores the name and marks it offered. Edit and Bash are stubbed
 // beneath the mod, and toasts are recorded.
-type Corrupt = { task: boolean; toast: boolean; plan?: boolean; hold?: number }
+type Corrupt = { task: boolean; toast: boolean; plan?: boolean; hold?: number; land?: { armed: boolean; reads: number } }
 const gateSetup = async (
   $: Engine,
   on: On,
@@ -690,6 +711,16 @@ const gateSetup = async (
       for (let tick = 0; tick < 200; tick++) await Promise.resolve()
     }
     if (corrupt.plan && e.key === 'plan') return { value: { value: null, version: 1 } }
+    // The second read of the task atom while armed is the update's own: the plan has landed since the snapshot.
+    if (corrupt.land?.armed && e.key === 'task') {
+      corrupt.land.reads += 1
+      if (corrupt.land.reads === 2) {
+        corrupt.land.armed = false
+        const res = await next(e)
+
+        return res.value === undefined ? res : { value: { ...res.value, value: { open: true, planned: true, denies: 0 } } }
+      }
+    }
 
     return corrupt.task && e.key === 'task' ? { value: { value: null, version: 1 } } : next(e)
   })
@@ -813,6 +844,21 @@ test('gate: a throwing toast does not change the deny', async ($, on) => {
   const denied = await $.tool.call(EDIT)
   expect(denied.deny).toContain(TOOL)
   expect(denied.result).toBeUndefined()
+})
+
+test('gate: a plan landing between the snapshot and the update allows the call, with no deny and no toast', async ($, on) => {
+  const corrupt: Corrupt = { task: false, toast: false, land: { armed: false, reads: 0 } }
+  const { toasts } = await gateSetup($, on, corrupt)
+  await $.turn.start({ text: 'edit a file', turnId: 't1' })
+  // The gate reads the task atom twice: the snapshot, then the update's own read. The plan lands in between.
+  if (corrupt.land !== undefined) corrupt.land.armed = true
+  const raced = await $.tool.call(EDIT)
+  expect(raced.deny).toBeUndefined()
+  expect(raced.result).toBe('edited')
+  expect(toasts).toEqual([])
+  // The raced call counted no deny, and the plan stays in force for the next call.
+  expect((await $.tool.call(EDIT)).result).toBe('edited')
+  expect(toasts).toEqual([])
 })
 
 // A mirror whose first compare-and-set misses (T02). `update` retries a write that missed its
