@@ -37,6 +37,7 @@ export type ActivityState = {
   detail?: string
   resume?: ActivityPhase
   subagents: string[]
+  running: Array<{ id: string; tool: string }>
   since: number
 }
 export type PlanToolState = { name: string | null; offered: boolean }
@@ -67,6 +68,7 @@ declare module 'claude-code' {
         detail?: string
         resume?: 'idle' | 'working' | 'tool' | 'permission' | 'question' | 'compacting' | 'interrupted' | 'error'
         subagents: string[]
+        running: Array<{ id: string; tool: string }>
         since: number
       }
       enforceSession: boolean
