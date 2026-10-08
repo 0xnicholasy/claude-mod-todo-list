@@ -20,6 +20,7 @@ import {
   PLAN_TOOL_SHORT_NAME,
   touchesPlan,
 } from './plan-tool'
+import { taskCreateFrom, taskUpdateFrom, todosFrom } from './post-tool'
 import { clean } from './sanitize'
 import { ACCENT_STORE_KEY, resolveAccent, validAccent } from './accent'
 import { buildTree, DEFAULT_WIDTH, paneRows, statusLine } from './tree'
@@ -229,13 +230,14 @@ async function runGate($: EngineInterface, tool: string, enforceConfig: boolean)
   return decision
 }
 
-// Answers a call to the plan tool. The hook answers itself and never calls next(e) (T01 Q1/Q3):
-// a result from the hook reaches the model verbatim, and an error is result text starting "Error:".
-async function answerPlanCall($: EngineInterface, input: unknown, agentId: string | undefined): Promise<{ result: string }> {
+// Answers a call to the plan tool with the text the model reads. The plan tool's tool.call hook
+// answers itself and never calls next(e) (T01 Q1/Q3): a result from the hook reaches the model
+// verbatim, and an error is result text starting "Error:".
+async function answerPlanCall($: EngineInterface, input: unknown, agentId: string | undefined): Promise<string> {
   // Only the main loop owns the plan; a subagent's call changes nothing.
-  if (agentId !== undefined) return { result: NOT_OWNER_TEXT }
+  if (agentId !== undefined) return NOT_OWNER_TEXT
   const parsed = parsePlanInput(input)
-  if ('error' in parsed) return { result: parsed.error }
+  if ('error' in parsed) return parsed.error
   const now = await $.clock.now()
   let applied = { error: 'Error: plan unchanged.' } as PlanApplied
   await update($, plan, (cur: Plan) => {
@@ -243,11 +245,11 @@ async function answerPlanCall($: EngineInterface, input: unknown, agentId: strin
 
     return 'error' in applied ? cur : applied.plan
   })
-  if ('error' in applied) return { result: applied.error }
+  if ('error' in applied) return applied.error
   if (touchesPlan(parsed.parsed)) await update($, task, onPlanTouched)
   await refreshStatus($)
 
-  return { result: applied.text }
+  return applied.text
 }
 
 // Mirrors a successful TaskCreate/TaskUpdate/TodoWrite call into the plan (D10). The call has
@@ -272,6 +274,48 @@ async function mirror($: EngineInterface, name: string, apply: (cur: Plan, now: 
   }
   await update($, task, onPlanTouched)
   await refreshStatus($)
+}
+
+// Ends the activity a finished call started. A subagent's call never started one; it only clears a
+// permission label (its own ask may be the one shown) and leaves a main-loop tool phase alone. The
+// plan tool never showed as Running.
+async function endTool($: EngineInterface, tool: string, agentId: string | undefined): Promise<void> {
+  if (isPlanTool(tool, (await read($, planTool)).name)) return
+  if (agentId !== undefined) {
+    // Only redraws when a permission label is up, so an ordinary subagent call stays silent.
+    if ((await read($, activity)).phase === 'permission') await applyActivity($, { type: 'permissionEnd' })
+
+    return
+  }
+  await applyActivity($, tool === ASK_TOOL ? { type: 'questionClose' } : { type: 'toolEnd' })
+}
+
+// A call finished: ends its activity, then mirrors a main-loop TaskCreate, TaskUpdate or TodoWrite
+// into the plan (D10). The hook only runs for a call that succeeded; a response in a shape the
+// narrowing does not know is logged and skipped. `input` and `response` are `unknown` because the
+// host types tool_input and tool_response that way; post-tool.ts narrows them.
+async function afterTool(
+  $: EngineInterface,
+  tool: string,
+  input: unknown,
+  response: unknown,
+  agentId: string | undefined,
+): Promise<void> {
+  await endTool($, tool, agentId)
+  if (agentId !== undefined) return
+  if (tool === 'TaskCreate') {
+    const created = taskCreateFrom(input, response)
+    if (created === null) return debugLog($, 'todo-list: TaskCreate response not recognised, not mirrored')
+    await mirror($, 'TaskCreate', (cur, now) => ingestTaskCreate(cur, created, now))
+  } else if (tool === 'TaskUpdate') {
+    const updated = taskUpdateFrom(input, response)
+    if (updated === null) return debugLog($, 'todo-list: TaskUpdate response not recognised, not mirrored')
+    await mirror($, 'TaskUpdate', (cur, now) => ingestTaskUpdate(cur, updated, now))
+  } else if (tool === 'TodoWrite') {
+    const todos = todosFrom(input, response)
+    if (todos === null) return debugLog($, 'todo-list: TodoWrite response not recognised, not mirrored')
+    await mirror($, 'TodoWrite', (cur, now) => ingestTodoWrite(cur, todos, now))
+  }
 }
 
 // Loads the colour saved by `/todo color` into the atom. A store error or a bad value keeps the
@@ -342,21 +386,11 @@ export const register: Register = (on, options) => {
     return { ...e, isDeferred: false }
   })
 
-  // Session activity (T09). Observe-only hooks: each records an event and returns what `next`
-  // returns, unchanged; a guard failure never blocks or alters the call. The tool.call part of
-  // it lives in the single catch-all tool.call hook below.
-  on('tool.check', async ($, e, next) => {
-    const verdict = await next(e)
-    await guard($, 'tool.check activity', undefined, async () => {
-      if (verdict.decision === 'ask' && e.tool_use_id !== undefined) {
-        await applyActivity($, { type: 'permissionAsk', tool: e.tool })
-      }
-    })
-
-    return verdict
-  })
-
-  // Second permission signal. Recorded before next: the chain may wait on the dialog itself.
+  // Session activity (T09). Observe-only hooks: each records an event and returns the event it was
+  // given, unchanged; a guard failure never blocks or alters the call. The tool.call and
+  // PostToolUse hooks below record tool start and end.
+  //
+  // The permission signal. Recorded before next: the chain may wait on the dialog itself.
   // Repeating permissionAsk is idempotent in the reducer.
   on('classic.PermissionRequest', async ($, e, next) => {
     await guard($, 'PermissionRequest', undefined, () => applyActivity($, { type: 'permissionAsk', tool: e.tool_name }))
@@ -393,14 +427,17 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('session.compact', async ($, e, next) => {
-    if (e.agentId !== undefined) return next(e)
-    await guard($, 'compact start', undefined, () => applyActivity($, { type: 'compactStart' }))
-    try {
-      return await next(e)
-    } finally {
-      await guard($, 'compact end', undefined, () => applyActivity($, { type: 'compactEnd' }))
-    }
+  // A subagent's compaction carries agent_id and is not shown.
+  on('classic.PreCompact', async ($, e, next) => {
+    if (e.agent_id === undefined) await guard($, 'compact start', undefined, () => applyActivity($, { type: 'compactStart' }))
+
+    return next(e)
+  })
+
+  on('classic.PostCompact', async ($, e, next) => {
+    if (e.agent_id === undefined) await guard($, 'compact end', undefined, () => applyActivity($, { type: 'compactEnd' }))
+
+    return next(e)
   })
 
   // The subagent's turn.complete carries agentId; the reducer ignores it (T01 Q7).
@@ -420,93 +457,61 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  // No tool.check hook for the plan tool: the tool.call hook answers before any check (Q4).
-  // The catch-all form is used because the registered name is known only after session.start.
+  // The gate and the start of the activity. The catch-all form is used because the registered name
+  // is known only after session.start.
   //
-  // One catch-all tool.call hook only: the host refuses two without a matcher. It does two jobs
-  // in this order. (1) The plan tool and subagent calls: the plan tool is answered right here
-  // and never reaches the activity code, so the activity wrapper cannot swallow its answer;
-  // a subagent call goes to next(e) and, once it ends, clears a permission label (its own ask
-  // may be the one shown) without touching a main-loop tool phase. (2) Every other main-loop call is wrapped in
-  // activity start/end around next(e) and its result is returned untouched. This hook is
-  // registered BEFORE the matcher hooks for TaskCreate/TaskUpdate/TodoWrite below (first
-  // registered is outermost), so those mirrors run inside next(e), still see the real result,
-  // and their results pass back out through this wrapper unchanged.
+  // The host refuses two tool.call hooks without a matcher, so this is the only one. It passes
+  // every call on with next(e) except a gate deny. Subagent calls and the plan tool go straight to
+  // next(e): the plan tool is answered by the matcher hook below, which is registered after this
+  // one so that this one sees the call first. Other main-loop calls run the gate and, once
+  // allowed, record Running (or Waiting for your answer). The end of the call is recorded by
+  // classic.PostToolUse and classic.PostToolUseFailure.
   on('tool.call', async ($, e, next) => {
-    const kind = await guard($, 'tool.call', 'skip' as 'skip' | 'subagent' | 'plan' | 'tool' | 'question', async () => {
-      const stored = (await read($, planTool)).name
-      if (isPlanTool(e.tool, stored)) return 'plan'
-      if (e.agentId !== undefined) return 'subagent'
+    const kind = await guard($, 'tool.call', 'skip' as 'skip' | 'tool' | 'question', async () => {
+      if (e.agentId !== undefined) return 'skip'
+      if (isPlanTool(e.tool, (await read($, planTool)).name)) return 'skip'
 
       return e.tool === ASK_TOOL ? 'question' : 'tool'
     })
-    if (kind === 'skip') return next(e)
-    if (kind === 'subagent') {
-      try {
-        return await next(e)
-      } finally {
-        // Only redraws when a permission label is up, so an ordinary subagent call stays silent.
-        await guard($, 'subagent tool end', undefined, async () => {
-          if ((await read($, activity)).phase === 'permission') await applyActivity($, { type: 'permissionEnd' })
-        })
-      }
-    }
-    if (kind === 'plan') {
-      return guard($, 'plan tool', { result: 'Error: the plan tool failed. Try again.' }, () =>
-        answerPlanCall($, e, e.agentId),
-      )
-    }
-    // The gate runs after the plan answer and before the activity wrapper, so a denied call never
-    // shows as Running. A guard failure allows the call.
+    if (kind !== 'tool' && kind !== 'question') return next(e)
+    // A guard failure allows the call.
     const gated = await guard($, 'gate', { kind: 'allow' } as GateDecision, () => runGate($, e.tool, enforceConfig))
-    if (gated.kind === 'deny') return { deny: gated.message }
-    const open: ActivityEvent = kind === 'question' ? { type: 'questionOpen' } : { type: 'toolStart', tool: e.tool }
-    const close: ActivityEvent = kind === 'question' ? { type: 'questionClose' } : { type: 'toolEnd' }
-    await guard($, 'tool start', undefined, () => applyActivity($, open))
-    try {
-      return await next(e)
-    } finally {
-      await guard($, 'tool end', undefined, () => applyActivity($, close))
+    // This text is gate.ts's denyText without the tool name (the hook must return a fixed string);
+    // register.test.ts checks the two stay in step.
+    if (gated.kind === 'deny') {
+      return { deny: 'Blocked: there is no plan for this task yet. Call mcp__todo-list__plan with {"op":"set","title":"<task>","nodes":[{"title":"<step>"}]} first, then retry the tool. If the tool is not loaded, load it first with ToolSearch (query "select:mcp__todo-list__plan").' }
     }
+    // A denied call never shows as Running.
+    const open: ActivityEvent = kind === 'question' ? { type: 'questionOpen' } : { type: 'toolStart', tool: e.tool }
+    await guard($, 'tool start', undefined, () => applyActivity($, open))
+
+    return next(e)
   })
 
-  // D10: mirror TaskCreate, TaskUpdate and TodoWrite into the tree. Main loop only; each hook
-  // lets the call run first and applies it only after it succeeded. The result is never changed.
-  on('tool.call', { tool: 'TaskCreate' }, async ($, e, next) => {
-    if (e.agentId !== undefined) return next(e)
-    const ran = await next(e)
-    if (ran.deny !== undefined || ran.isError === true) return ran
-    await guard($, 'TaskCreate', undefined, () =>
-      mirror($, 'TaskCreate', (cur, now) =>
-        ingestTaskCreate(cur, { id: ran.result.task.id, subject: e.subject, activeForm: e.activeForm }, now),
-      ),
+  // The plan tool. The API serves a plugin's own tool only from a tool.call hook, so this one answers
+  // every call to it and never reads `next`. The model reads the returned text as the tool result.
+  on('tool.call', { tool: 'mcp__todo-list__plan' }, async ($, e) => {
+    const text = await guard($, 'plan tool', 'Error: the plan tool failed. Try again.', () =>
+      answerPlanCall($, e, e.agentId),
     )
 
-    return ran
+    return { result: text }
   })
 
-  on('tool.call', { tool: 'TaskUpdate' }, async ($, e, next) => {
-    if (e.agentId !== undefined) return next(e)
-    const ran = await next(e)
-    if (ran.deny !== undefined || ran.isError === true || !ran.result.success) return ran
-    await guard($, 'TaskUpdate', undefined, () =>
-      mirror($, 'TaskUpdate', (cur, now) =>
-        ingestTaskUpdate(cur, { taskId: e.taskId, subject: e.subject, activeForm: e.activeForm, status: e.status }, now),
-      ),
+  // The end of a call, and D10: mirror TaskCreate, TaskUpdate and TodoWrite into the tree. The hook
+  // runs after the tool succeeded and changes nothing in what the model sees.
+  on('classic.PostToolUse', async ($, e, next) => {
+    await guard($, 'PostToolUse', undefined, () =>
+      afterTool($, e.tool_name, e.tool_input, e.tool_response, e.agent_id),
     )
 
-    return ran
+    return next(e)
   })
 
-  on('tool.call', { tool: 'TodoWrite' }, async ($, e, next) => {
-    if (e.agentId !== undefined) return next(e)
-    const ran = await next(e)
-    if (ran.deny !== undefined || ran.isError === true) return ran
-    await guard($, 'TodoWrite', undefined, () =>
-      mirror($, 'TodoWrite', (cur, now) => ingestTodoWrite(cur, ran.result.newTodos ?? e.todos, now)),
-    )
+  on('classic.PostToolUseFailure', async ($, e, next) => {
+    await guard($, 'PostToolUseFailure', undefined, () => endTool($, e.tool_name, e.agent_id))
 
-    return ran
+    return next(e)
   })
 
   // The instruction is added only when the plan tool is in the request's tool list. The pin
@@ -530,21 +535,14 @@ export const register: Register = (on, options) => {
     })
   })
 
-  // D12: the plan rides each new prompt as context, which also resyncs ids after a compaction.
   on('prompt.submit', async ($, e, next) => {
     await guard($, 'first prompt open', undefined, async () => {
       if ((await read($, firstPromptOpen)) !== 'armed') return
       await update($, firstPromptOpen, () => 'done')
       if (!(await $.ui.panes()).some(pane => pane.id === PANE && pane.isPlaced)) await openPane($)
     })
-    const context = await guard($, 'prompt.submit', undefined as string | undefined, async () => {
-      const name = (await read($, planTool)).name ?? PLAN_TOOL_FULL_NAME
 
-      return planContext(await read($, plan), name, formatForModel)
-    })
-    if (context === undefined) return next(e)
-
-    return next({ ...e, context: [...(e.context ?? []), context] })
+    return next(e)
   })
 
   // turn.start fires once per prompt of the main loop and not for subagents (T01 Q7).
@@ -555,6 +553,13 @@ export const register: Register = (on, options) => {
       await update($, task, t => onNewPrompt(t, current, e.text))
     })
     await guard($, 'turn.start activity', undefined, () => applyActivity($, { type: 'turnStart' }))
+    // D12: the plan rides each new prompt as a user-role row the model reads (the person does not
+    // see it as typed), which also resyncs ids after a compaction.
+    await guard($, 'plan context', undefined, async () => {
+      const name = (await read($, planTool)).name ?? PLAN_TOOL_FULL_NAME
+      const text = planContext(await read($, plan), name, formatForModel)
+      if (text !== undefined) await $.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } })
+    })
 
     return next(e)
   })

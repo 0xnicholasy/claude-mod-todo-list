@@ -1,6 +1,7 @@
 import type { CommandRunInput, EngineInterface, On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
+import { denyText } from './gate'
 import { DEFAULT_ACCENT } from './tree'
 
 // The plan tool is called by its literal name: $.tool.register is not available under
@@ -94,16 +95,36 @@ test('tool.describe pins the plan tool and leaves other tools alone', async ($, 
   expect(pinned.isDeferred).toBe(false)
 })
 
-test('prompt.submit attaches the plan as context, and nothing for an empty plan', async ($, on) => {
-  setup(on)
+// Records the rows the mod appends to the conversation; the kit stores them beneath this hook.
+const recordRows = (on: On): Array<{ type: string; content: string }> => {
+  const rows: Array<{ type: string; content: string }> = []
+  on('session.append', async (_$, e, next) => {
+    rows.push({ type: e.message.type, content: JSON.stringify(e.message.content) })
+
+    return next(e)
+  })
+
+  return rows
+}
+
+test('turn.start appends the plan as a user row, and nothing for an empty plan', async ($, on) => {
+  const { logs } = setup(on)
+  on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
+  on('store.get', async () => ({ value: undefined }))
   on('prompt.submit', async (_$, e) => ({ text: e.text, context: e.context }))
-  const empty = await $.prompt.submit({ text: 'hello', wait: false, origin: USER })
-  expect(empty.context ?? []).toEqual([])
+  const rows = recordRows(on)
+  await $.turn.start({ text: 'hello', turnId: 't1' })
+  expect(rows).toEqual([])
   await $.tool.call(SET)
+  await $.turn.start({ text: 'continue', turnId: 't2' })
+  expect(rows).toHaveLength(1)
+  expect(rows[0]?.type).toBe('user')
+  expect(rows[0]?.content).toContain(`update it with ${TOOL}`)
+  expect(rows[0]?.content).toContain('1.2 [pending] Write')
+  // The prompt itself no longer carries the plan.
   const out = await $.prompt.submit({ text: 'continue', wait: false, origin: USER })
-  expect(out.context).toHaveLength(1)
-  expect(out.context?.[0]).toContain(`update it with ${TOOL}`)
-  expect(out.context?.[0]).toContain('1.2 [pending] Write')
+  expect(out.context ?? []).toEqual([])
+  expect(logs).toEqual([])
 })
 
 test('turn.start runs the task lifecycle without a guard failure', async ($, on) => {
@@ -238,27 +259,46 @@ test('/todo adds the fullscreen tip only on a wide main-screen layout', async ($
   expect((await $.command.run(withPresentation(true, 160))).text).not.toContain(tip)
 })
 
-// The tool beneath the mod: the stub stands in for the real tool and supplies the result.
-const stubTasks = (on: On, update: { success: boolean } = { success: true }): void => {
+// The tool beneath the mod: the stub stands in for the real tool and supplies the result. The
+// host then raises classic.PostToolUse with that result as tool_response, which is what the mod
+// mirrors from, so `finish` raises it by hand.
+const stubTasks = (on: On): void => {
   on('tool.call', { tool: 'TaskCreate' }, async () => ({ result: { task: { id: '5', subject: 'Write docs' } } }))
-  on('tool.call', { tool: 'TaskUpdate' }, async () => ({
-    result: { success: update.success, taskId: '5', updatedFields: ['status'] },
-  }))
+  on('tool.call', { tool: 'TaskUpdate' }, async () => ({ result: { success: true, taskId: '5', updatedFields: ['status'] } }))
+  on('classic.PostToolUse', async () => ({}))
+  on('classic.PostToolUseFailure', async () => ({}))
 }
 const CREATE = { tool: 'TaskCreate', subject: 'Write docs', description: 'd', activeForm: 'Writing docs' } as const
+const CREATED = { task: { id: '5', subject: 'Write docs' } }
 const START = { tool: 'TaskUpdate', taskId: '5', status: 'in_progress' } as const
+const DONE = { success: true, taskId: '5', updatedFields: ['status'] }
+const finish = (
+  $: Engine,
+  name: string,
+  input: Record<string, unknown>,
+  response: unknown,
+  agentId?: string,
+): ReturnType<Engine['classic']['PostToolUse']> =>
+  $.classic.PostToolUse({
+    tool_name: name,
+    tool_input: input,
+    tool_response: response,
+    tool_use_id: 'tu1',
+    ...(agentId !== undefined ? { agent_id: agentId } : {}),
+  })
 
 test('a successful TaskCreate and TaskUpdate fill and patch the tree', async ($, on) => {
   const { statuses, logs } = setup(on)
   stubTasks(on)
   const out = await $.tool.call(CREATE)
-  expect(out.result).toEqual({ task: { id: '5', subject: 'Write docs' } })
-  // T09: the call itself now shows as Running, then the mirrored plan, then back to Working.
-  expect(statuses).toEqual(['Running TaskCreate', 'Plan 0/1 · Writing docs · Running TaskCreate', 'Plan 0/1 · Writing docs · Working'])
+  expect(out.result).toEqual(CREATED)
+  await finish($, 'TaskCreate', { subject: 'Write docs', activeForm: 'Writing docs' }, CREATED)
+  // The call shows as Running, then Working when it ends, then the mirrored plan.
+  expect(statuses).toEqual(['Running TaskCreate', 'Working', 'Plan 0/1 · Writing docs · Working'])
   expect(String((await $.tool.call(SHOW)).result)).toContain('1 [pending] Write docs')
-  await $.tool.call(START)
+  await finish($, 'TaskUpdate', { taskId: '5', status: 'in_progress' }, DONE)
   expect(String((await $.tool.call(SHOW)).result)).toContain('1 [in_progress] Write docs')
-  await $.tool.call({ tool: 'TaskUpdate', taskId: '5', status: 'deleted' })
+  await finish($, 'TaskUpdate', { taskId: '5', status: 'deleted' }, DONE)
   expect(String((await $.tool.call(SHOW)).result)).toContain('No plan yet')
   expect(logs).toEqual([])
 })
@@ -266,53 +306,52 @@ test('a successful TaskCreate and TaskUpdate fill and patch the tree', async ($,
 test('task nodes survive a later plan set', async ($, on) => {
   setup(on)
   stubTasks(on)
-  await $.tool.call(CREATE)
+  await finish($, 'TaskCreate', { subject: 'Write docs' }, CREATED)
   const out = await $.tool.call(SET)
   expect(String(out.result)).toContain('Write docs')
   expect(String(out.result)).toContain('Draft')
 })
 
-test('denied, errored and subagent task calls change nothing', async ($, on) => {
-  const { statuses } = setup(on)
-  on('tool.call', { tool: 'TaskCreate' }, async (_$, e) => {
-    if (e.subject === 'denied') return { deny: 'no' }
-    const result = { task: { id: '5', subject: e.subject } }
-
-    return e.subject === 'errored' ? { result, isError: true as const } : { result }
-  })
-  await $.tool.call({ ...CREATE, subject: 'denied' })
-  await $.tool.call({ ...CREATE, subject: 'errored' })
-  const sub: Parameters<typeof $.tool.call>[0] & { agentId: string } = { ...CREATE, agentId: 'sub-1' }
-  await $.tool.call(sub)
-  // T09: the denied and errored main-loop calls show Running then Working; no plan status appears.
+test('failed, subagent and unrecognised task calls change nothing', async ($, on) => {
+  const { statuses, logs } = setup(on)
+  stubTasks(on)
+  await $.tool.call(CREATE)
+  // A failed call raises PostToolUseFailure: the Running state ends and nothing is mirrored.
+  await $.classic.PostToolUseFailure({ tool_name: 'TaskCreate', tool_input: { subject: 'x' }, tool_use_id: 'tu1', error: 'boom' })
+  await finish($, 'TaskCreate', { subject: 'Write docs' }, CREATED, 'sub-1')
+  await finish($, 'TaskCreate', { subject: 'Write docs' }, { task: {} })
   expect(statuses.filter(s => s?.includes('Plan'))).toEqual([])
-  expect(statuses).toEqual(['Running TaskCreate', 'Working', 'Running TaskCreate', 'Working'])
+  // The last Working is the unrecognised main-loop call ending its (already ended) Running state.
+  expect(statuses).toEqual(['Running TaskCreate', 'Working', 'Working'])
+  expect(logs).toEqual(['todo-list: TaskCreate response not recognised, not mirrored'])
   expect(String((await $.tool.call(SHOW)).result)).toContain('No plan yet')
 })
 
 test('a TaskUpdate that did not succeed changes nothing', async ($, on) => {
   const { statuses } = setup(on)
-  const update = { success: true }
-  stubTasks(on, update)
+  stubTasks(on)
   await $.tool.call(CREATE)
+  await finish($, 'TaskCreate', { subject: 'Write docs', activeForm: 'Writing docs' }, CREATED)
   statuses.length = 0
-  update.success = false
   await $.tool.call(START)
-  // T09: only the activity part of the line changes; the plan part stays as it was.
+  await finish($, 'TaskUpdate', { taskId: '5', status: 'in_progress' }, { success: false, taskId: '5' })
+  // Only the activity part of the line changes; the plan part stays as it was.
   expect(statuses).toEqual(['Plan 0/1 · Writing docs · Running TaskUpdate', 'Plan 0/1 · Writing docs · Working'])
   expect(String((await $.tool.call(SHOW)).result)).toContain('1 [pending] Write docs')
 })
 
-test('a synthetic TodoWrite event fills the tree with todo nodes', async ($, on) => {
+test('a TodoWrite fills the tree with todo nodes from its response', async ($, on) => {
   const { statuses } = setup(on)
   const todos: Array<{ content: string; status: 'pending' | 'in_progress' | 'completed'; activeForm: string }> = [
     { content: 'A', status: 'in_progress', activeForm: 'Doing A' },
     { content: 'B', status: 'pending', activeForm: 'Doing B' },
   ]
-  // The synthetic event: the real tool is absent in 2.1.289 (T01 Q6), so the stub plays it.
+  // The real tool is absent in 2.1.289 (T01 Q6) and in `claude -p`, so the stub plays it.
   on('tool.call', { tool: 'TodoWrite' }, async () => ({ result: { oldTodos: [], newTodos: todos } }))
+  on('classic.PostToolUse', async () => ({}))
   await $.tool.call({ tool: 'TodoWrite', todos })
-  expect(statuses).toEqual(['Running TodoWrite', 'Plan 0/2 · Doing A · Running TodoWrite', 'Plan 0/2 · Doing A · Working'])
+  await finish($, 'TodoWrite', { todos }, { oldTodos: [], newTodos: todos })
+  expect(statuses).toEqual(['Running TodoWrite', 'Working', 'Plan 0/2 · Doing A · Working'])
   expect(String((await $.tool.call(SHOW)).result)).toContain('2 [pending] B')
 })
 
@@ -342,8 +381,9 @@ const pending = (): { wait: Promise<void>; release: () => void } => {
   return { wait, release }
 }
 
-test('running a tool shows Running <tool>, and finishing it falls back to Working', async ($, on) => {
+test('running a tool shows Running <tool>, and PostToolUse falls back to Working', async ($, on) => {
   const { statuses } = activitySetup(on)
+  on('classic.PostToolUse', async () => ({}))
   const gate = pending()
   on('tool.call', { tool: 'Bash' }, async () => {
     await gate.wait
@@ -357,43 +397,43 @@ test('running a tool shows Running <tool>, and finishing it falls back to Workin
   expect(statuses.at(-1)).toBe('Running Bash')
   gate.release()
   await call
+  // The call returning is not the end: the host raises PostToolUse after it.
+  expect(statuses.at(-1)).toBe('Running Bash')
+  await finish($, 'Bash', { command: 'ls' }, 'ok')
   expect(statuses.at(-1)).toBe('Working')
 })
 
-test('a tool that errors still ends the running state', async ($, on) => {
+test('a tool that fails still ends the running state', async ($, on) => {
   const { statuses } = activitySetup(on)
-  on('tool.call', { tool: 'Bash' }, async () => {
-    throw new Error('boom')
-  })
+  on('classic.PostToolUseFailure', async () => ({}))
+  stubBash(on)
   await $.turn.start({ text: 'go', turnId: 't1' })
-  await $.tool.call(BASH).catch(() => undefined)
+  await $.tool.call(BASH)
+  expect(statuses.at(-1)).toBe('Running Bash')
+  await $.classic.PostToolUseFailure({ tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: 'tu1', error: 'boom' })
   expect(statuses.at(-1)).toBe('Working')
 })
 
-test('tool.check ask shows Waiting for permission, and PermissionRequest repeats it harmlessly', async ($, on) => {
+test('PermissionRequest alone shows Waiting for permission, repeating it is harmless, and the tool ending clears it', async ($, on) => {
   const { statuses } = activitySetup(on)
-  on('tool.check', async () => ({ decision: 'ask' as const }))
   on('classic.PermissionRequest', async () => ({}))
-  // A query carries no tool_use_id and changes nothing.
-  await $.tool.check({ tool: 'Bash', input: { command: 'ls' } })
-  expect(statuses).toEqual([])
-  await $.tool.check({ tool: 'Bash', input: { command: 'ls' }, tool_use_id: 'tu1' })
+  on('classic.PostToolUse', async () => ({}))
+  stubBash(on)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.tool.call(BASH)
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
   expect(statuses.at(-1)).toBe('Waiting for permission: Bash')
   const before = statuses.length
   await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
   expect(statuses.at(-1)).toBe('Waiting for permission: Bash')
   expect(statuses.length).toBe(before + 1)
+  await finish($, 'Bash', { command: 'ls' }, 'ok')
+  expect(statuses.at(-1)).toBe('Working')
 })
 
-test('an allowed tool.check changes nothing', async ($, on) => {
+test('AskUserQuestion shows Waiting for your answer until PostToolUse', async ($, on) => {
   const { statuses } = activitySetup(on)
-  on('tool.check', async () => ({ decision: 'allow' as const }))
-  await $.tool.check({ tool: 'Read', input: {}, tool_use_id: 'tu1' })
-  expect(statuses).toEqual([])
-})
-
-test('AskUserQuestion shows Waiting for your answer while next is pending', async ($, on) => {
-  const { statuses } = activitySetup(on)
+  on('classic.PostToolUse', async () => ({}))
   const gate = pending()
   on('tool.call', { tool: 'AskUserQuestion' }, async () => {
     await gate.wait
@@ -406,75 +446,81 @@ test('AskUserQuestion shows Waiting for your answer while next is pending', asyn
   expect(statuses.at(-1)).toBe('Waiting for your answer')
   gate.release()
   await call
+  expect(statuses.at(-1)).toBe('Waiting for your answer')
+  await finish($, 'AskUserQuestion', { questions: [] }, 'answered')
   expect(statuses.at(-1)).toBe('Working')
 })
 
 test('the plan tool never shows as Running and its answer passes through', async ($, on) => {
   const { statuses } = activitySetup(on)
+  on('classic.PostToolUse', async () => ({}))
   const out = await $.tool.call(SET)
   expect(out.result).toContain('Plan: Add README section')
   expect(statuses).toEqual(['Plan 0/3 · Outline'])
+  // Its PostToolUse ends nothing and changes nothing.
+  await finish($, TOOL, { op: 'set' }, out.result)
+  expect(statuses).toEqual(['Plan 0/3 · Outline'])
 })
 
-test('a mirrored TaskCreate passes through the activity wrapper and ends Running', async ($, on) => {
+test('a TaskCreate passes through the catch-all hook unchanged and ends Running at PostToolUse', async ($, on) => {
   const { statuses } = activitySetup(on)
   stubTasks(on)
   await $.turn.start({ text: 'go', turnId: 't1' })
   const out = await $.tool.call(CREATE)
-  expect(out.result).toEqual({ task: { id: '5', subject: 'Write docs' } })
+  expect(out.result).toEqual(CREATED)
+  expect(statuses.at(-1)).toBe('Running TaskCreate')
+  await finish($, 'TaskCreate', { subject: 'Write docs', activeForm: 'Writing docs' }, CREATED)
   expect(statuses.at(-1)).toBe('Plan 0/1 · Writing docs · Working')
 })
 
 test('a subagent tool call does not show as Running', async ($, on) => {
   const { statuses } = activitySetup(on)
+  on('classic.PostToolUse', async () => ({}))
   stubBash(on)
   const sub: Parameters<typeof $.tool.call>[0] & { agentId: string } = { ...BASH, agentId: 'sub-1' }
   await $.tool.call(sub)
+  await finish($, 'Bash', { command: 'ls' }, 'ok', 'sub-1')
   expect(statuses).toEqual([])
 })
 
 test('a subagent tool call ending clears its permission label but not a main-loop Running phase', async ($, on) => {
   const { statuses } = activitySetup(on)
-  on('tool.check', async () => ({ decision: 'ask' as const }))
-  stubBash(on)
+  on('classic.PermissionRequest', async () => ({}))
+  on('classic.PostToolUse', async () => ({}))
   const gate = pending()
   on('tool.call', { tool: 'Read' }, async () => {
     await gate.wait
 
     return { result: 'ok' }
   })
-  const sub: Parameters<typeof $.tool.call>[0] & { agentId: string } = { ...BASH, agentId: 'sub-1' }
   await $.turn.start({ text: 'go', turnId: 't1' })
-  await $.tool.check({ tool: 'Bash', input: { command: 'ls' }, tool_use_id: 'tu1' })
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
   expect(statuses.at(-1)).toBe('Waiting for permission: Bash')
-  await $.tool.call(sub)
+  await finish($, 'Bash', { command: 'ls' }, 'ok', 'sub-1')
   expect(statuses.at(-1)).not.toContain('Waiting for permission')
 
   // A main-loop tool still running is not ended by a subagent call finishing.
   const main = $.tool.call({ tool: 'Read', file_path: '/x' })
   await settle()
   expect(statuses.at(-1)).toBe('Running Read')
-  await $.tool.call(sub)
+  await finish($, 'Bash', { command: 'ls' }, 'ok', 'sub-1')
   expect(statuses.at(-1)).toBe('Running Read')
   gate.release()
   await main
-}) 
+})
 
-test('compacting shows Compacting while next is pending, then resumes', async ($, on) => {
+test('PreCompact shows Compacting until PostCompact, and a subagent compaction shows nothing', async ($, on) => {
   const { statuses } = activitySetup(on)
-  const gate = pending()
-  on('session.compact', async () => {
-    await gate.wait
-
-    return { skip: 'test' }
-  })
+  on('classic.PreCompact', async () => ({}))
+  on('classic.PostCompact', async () => ({}))
   await $.turn.start({ text: 'go', turnId: 't1' })
-  // next() refuses an empty transcript, so the call carries one message.
-  const run = $.session.compact({ trigger: 'manual', messages: [{ role: 'user', text: 'hello', toolUses: [] }] })
-  await settle()
+  await $.classic.PreCompact({ trigger: 'manual', custom_instructions: null, agent_id: 'sub-1' })
+  expect(statuses.at(-1)).toBe('Working')
+  await $.classic.PreCompact({ trigger: 'manual', custom_instructions: null })
   expect(statuses.at(-1)).toBe('Compacting')
-  gate.release()
-  await run
+  await $.classic.PostCompact({ trigger: 'manual', compact_summary: 's', agent_id: 'sub-1' })
+  expect(statuses.at(-1)).toBe('Compacting')
+  await $.classic.PostCompact({ trigger: 'manual', compact_summary: 's' })
   expect(statuses.at(-1)).toBe('Working')
 })
 
@@ -594,6 +640,8 @@ test('gate: Edit is denied before a plan and allowed after a set', async ($, on)
   const denied = await $.tool.call(EDIT)
   expect(denied.deny).toContain(TOOL)
   expect(denied.deny).toContain('"op":"set"')
+  // The hook returns a fixed text: gate.ts's denyText with the tool name taken out.
+  expect(denied.deny).toBe(denyText('X', TOOL).replace('Blocked X:', 'Blocked:').replace('retry X.', 'retry the tool.'))
   expect(toasts).toEqual(['Blocked Edit: no plan yet. /todo off turns this off.'])
   await $.tool.call(SET)
   const allowed = await $.tool.call(EDIT)
