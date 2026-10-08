@@ -880,6 +880,16 @@ test('drop toast: an unrecognised TaskCreate response shows one toast', async ($
   expect(toasts).toEqual([dropToast(DROPPED_UNRECOGNISED)])
 })
 
+test('drop toast: a TaskUpdate the tool reported as failed shows no toast and keeps the slot', async ($, on) => {
+  stubTasks(on)
+  const { toasts, logs } = await gateSetup($, on)
+  await finish($, 'TaskUpdate', { taskId: '5', status: 'completed' }, { success: false, taskId: '5' })
+  expect(logs.filter(line => line.includes('reported failure'))).toHaveLength(1)
+  expect(toasts.filter(text => text.startsWith('Plan not updated'))).toEqual([])
+  await finish($, 'TaskCreate', { subject: 'Write docs' }, { unexpected: true })
+  expect(toasts).toEqual([dropToast(DROPPED_UNRECOGNISED)])
+})
+
 test('drop toast: a session clear re-arms it, any other session end does not', async ($, on) => {
   stubTasks(on)
   on('session.end', async (_$, e) => ({ sessionId: e.sessionId }))

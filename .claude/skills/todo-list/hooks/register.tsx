@@ -20,7 +20,7 @@ import {
   PLAN_TOOL_SHORT_NAME,
   touchesPlan,
 } from './plan-tool'
-import { taskCreateFrom, taskUpdateFrom, todosFrom } from './post-tool'
+import { taskCreateFrom, taskUpdateFailed, taskUpdateFrom, todosFrom } from './post-tool'
 import { clean } from './sanitize'
 import { ACCENT_STORE_KEY, resolveAccent, validAccent } from './accent'
 import { buildTree, DEFAULT_WIDTH, paneRows, statusLine } from './tree'
@@ -348,6 +348,8 @@ async function afterTool(
     if (created === null) return dropUnrecognised($, 'TaskCreate')
     await mirror($, 'TaskCreate', (cur, now) => ingestTaskCreate(cur, created, now))
   } else if (tool === 'TaskUpdate') {
+    // The tool said the update failed: nothing to mirror and nothing to report.
+    if (taskUpdateFailed(response)) return debugLog($, 'todo-list: TaskUpdate reported failure, not mirrored')
     const updated = taskUpdateFrom(input, response)
     if (updated === null) return dropUnrecognised($, 'TaskUpdate')
     await mirror($, 'TaskUpdate', (cur, now) => ingestTaskUpdate(cur, updated, now))
