@@ -806,6 +806,19 @@ test('mirror: a TaskCreate that fits on the first attempt and errors on the retr
   expect(isDenied(await $.tool.call(EDIT))).toBe(true)
 })
 
+test('mirror: a TaskUpdate for an unknown id is ignored, so the gate stays closed and no toast fires', async ($, on) => {
+  stubTasks(on)
+  const { toasts, logs, statuses } = await gateSetup($, on)
+  await $.turn.start({ text: 'edit a file', turnId: 't1' })
+  const before = statuses.length
+  await finish($, 'TaskUpdate', { taskId: '99', status: 'completed' }, DONE)
+  expect(logs.filter(line => line.includes('TaskUpdate ignored'))).toHaveLength(1)
+  expect(logs.filter(line => line.includes('not mirrored'))).toEqual([])
+  expect(statuses.slice(before).every(s => s === undefined || !s.includes('Plan'))).toBe(true)
+  expect(isDenied(await $.tool.call(EDIT))).toBe(true)
+  expect(toasts).toEqual(['Blocked Edit: no plan yet. /todo off turns this off.'])
+})
+
 // Draws the pane and returns the element tree as JSON, so a test can look for a colour.
 const drawPane = async ($: Engine, bodyColumns = 60, bodyRows = 20): Promise<string> => {
   const element = await $.ui.render({

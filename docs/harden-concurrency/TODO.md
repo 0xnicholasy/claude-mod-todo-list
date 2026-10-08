@@ -2,7 +2,7 @@
 
 ultraplan: harden-concurrency | branch: feat/harden-concurrency | base: main | tag: pre-harden-concurrency-main | created: 2026-10-08
 Status: ACTIVE
-Progress: 4/9 done
+Progress: 5/9 done
 
 ## Goal
 The mod must behave correctly when Claude runs tool calls in parallel and when a write or a mirror fails. Specifically:
@@ -94,7 +94,7 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 - verify: `rtk proxy npm run check`; `npm ci && npm run typecheck`
 
 ### T05 Make an unknown-id TaskUpdate an explicit ignored outcome
-- status: todo
+- status: done (#PR, 2026-10-08)
 - needs: T02
 - size: S
 - scope: Today `ingestTaskUpdate` (ingest.ts:55-57) returns `{ plan }` for an unknown taskId, and `mirror` still runs `onPlanTouched` (register.tsx:275-276). Return a distinct `{ ignored: '<stable reason>' }` outcome instead, and widen the result type. In `mirror`, an ignored outcome debug-logs only and skips `onPlanTouched` and the status refresh. No toast: an ignored outcome is not a drop.
@@ -173,3 +173,4 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 - 2026-10-08 T02 done: mirror() reassigns its whole outcome on every CAS attempt; a forced-miss state.set seam covers error-then-success and success-then-error (#28)
 - 2026-10-08 T03 done: the activity reducer tracks running calls by id with a name fallback; the label is the newest running call and the phase drops to working only when none remain (#29)
 - 2026-10-08 T04 done: gate.ts gains a pure transition(cur, input) returning next, decision and toast; deny/pause counting matches runGate and is walked 0 through 5 in gate.test.ts (#30)
+- 2026-10-08 T05 done: an unknown-id TaskUpdate returns { ignored: IGNORED_UNKNOWN_TASK }; mirror() debug-logs it and skips onPlanTouched and the status refresh, so the gate stays closed and no toast fires (#PR)
