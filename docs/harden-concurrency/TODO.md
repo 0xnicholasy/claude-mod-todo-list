@@ -58,7 +58,7 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 - verify: `rtk proxy npm run check`; `npm ci && npm run typecheck`
 
 ### T03 Track running tool calls in the activity reducer (pure)
-- status: done (#PR, 2026-10-08)
+- status: done (#29, 2026-10-08)
 - needs: none
 - size: M
 - scope: Add `running: Array<{ id: string; tool: string }>` (D4) inline to the `activity` atom (types/index.d.ts:64-71) and to the named `ActivityState` (:34-41). `emptyActivity` (activity.ts:31) defaults it to `[]`. Event changes:
@@ -164,8 +164,11 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 
 ## Backlog
 - T07: an AskUserQuestion entry in activity.running is only removed by its PostToolUse (toolEnd by id); until then questionClose settles into `tool` labelled AskUserQuestion. Confirm T07's id wiring ends it.
+- T07: in a parallel batch a toolEnd for call B while call A waits on permission settles out of `permission` (activity.ts toolEnd); fixing it needs the asking call's id, which PermissionRequest lacks. (T03 review, Medium)
+- activity.ts: `stopFailure` enters `error` without clearing `running`, unlike the other turn ends; `compactEnd` into idle/interrupted/error keeps a non-empty `running` until the next turnStart. (T03 review, Low)
+- activity.ts: `running` has no cap and no duplicate-id guard; a blank id with no tool is a no-op rather than clear-all, so T07 must not pass blank ids. (T03 review, Low)
 
 ## Log
 - 2026-10-08 T01 done: plan-tool failure path locked by a register.test.ts case; mutation check failed as expected (#26)
 - 2026-10-08 T02 done: mirror() reassigns its whole outcome on every CAS attempt; a forced-miss state.set seam covers error-then-success and success-then-error (#28)
-- 2026-10-08 T03 done: the activity reducer tracks running calls by id with a name fallback; the label is the newest running call and the phase drops to working only when none remain (#PR)
+- 2026-10-08 T03 done: the activity reducer tracks running calls by id with a name fallback; the label is the newest running call and the phase drops to working only when none remain (#29)
