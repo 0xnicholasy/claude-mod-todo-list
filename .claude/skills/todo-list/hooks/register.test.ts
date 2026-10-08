@@ -74,7 +74,7 @@ test('a subagent plan call changes nothing', async ($, on) => {
 })
 
 test('prompt.compose adds the plan section once, and only when the tool is offered', async ($, on) => {
-  setup(on)
+  const { logs } = setup(on)
   const base = { model: 'm', promptModel: 'm', surfaces: [], outputStyle: null, traits: [] }
   on('prompt.compose', async () => ({ sections: [] }))
   const withTool = await $.prompt.compose({ ...base, tools: ['Read', TOOL] })
@@ -611,7 +611,12 @@ test('Notification is logged by type only, and the call result is unchanged', as
 // `claude plugin test` registration does not run, so each test first sends a prompt.compose that
 // lists the plan tool, which stores the name and marks it offered. Edit and Bash are stubbed
 // beneath the mod, and toasts are recorded.
-const gateSetup = async ($: Engine, on: On, corrupt = { task: false, toast: false }): Promise<{ toasts: string[] }> => {
+type Corrupt = { task: boolean; toast: boolean; plan?: boolean }
+const gateSetup = async (
+  $: Engine,
+  on: On,
+  corrupt: Corrupt = { task: false, toast: false },
+): Promise<{ toasts: string[] }> => {
   const toasts: string[] = []
   on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
   on('prompt.compose', async () => ({ sections: [] }))
@@ -622,10 +627,18 @@ const gateSetup = async ($: Engine, on: On, corrupt = { task: false, toast: fals
     return next(e)
   })
   // The seam for a forced throw: once `corrupt.task` is set, the task atom reads back malformed.
-  on('state.get', async (_$, e, next) => (corrupt.task && e.key === 'task' ? { value: { value: null, version: 1 } } : next(e)))
+  on('state.get', async (_$, e, next) => {
+    // One-shot: update() re-reads a malformed value several times before it throws, so a seam that
+    // cleared on the first read would let the retry succeed. It stays malformed until the plan guard
+    // has logged its failure, and clears itself at the next read.
+    if (corrupt.plan && logs.some(line => line.startsWith('todo-list: plan tool threw'))) corrupt.plan = false
+    if (corrupt.plan && e.key === 'plan') return { value: { value: null, version: 1 } }
+
+    return corrupt.task && e.key === 'task' ? { value: { value: null, version: 1 } } : next(e)
+  })
   on('tool.call', { tool: 'Edit' }, async () => ({ result: 'edited' }))
   on('tool.call', { tool: 'Read' }, async () => ({ result: 'read' }))
-  setup(on)
+  const { logs } = setup(on)
   const base = { model: 'm', promptModel: 'm', surfaces: [], outputStyle: null, traits: [] }
   await $.prompt.compose({ ...base, tools: ['Read', 'Edit', TOOL] })
 
@@ -686,6 +699,17 @@ test('gate: a throw in the gate path allows the call', async ($, on) => {
   const out = await $.tool.call(EDIT)
   expect(out.deny).toBeUndefined()
   expect(out.result).toBe('edited')
+})
+
+test('gate: a plan tool failure answers with the error text and leaves no plan', async ($, on) => {
+  const corrupt: Corrupt = { task: false, toast: false }
+  await gateSetup($, on, corrupt)
+  await $.turn.start({ text: 'edit a file', turnId: 't1' })
+  // The plan atom reads back malformed, so the plan update throws and the guard answers.
+  corrupt.plan = true
+  expect((await $.tool.call(SET)).result).toBe('Error: the plan tool failed. Try again.')
+  expect(String((await $.tool.call(SHOW)).result)).toContain('No plan yet')
+  expect(isDenied(await $.tool.call(EDIT))).toBe(true)
 })
 
 test('gate: a subagent Edit is allowed', async ($, on) => {
