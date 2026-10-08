@@ -64,12 +64,14 @@ const paneFit = atom({ plugin: 'todo-list', key: 'paneFit' } as const, null as P
 // closed. A /clear resets it to 'idle' and no session.start follows, so a cleared session does not re-open.
 const firstPromptOpen = atom({ plugin: 'todo-list', key: 'firstPromptOpen' } as const, 'idle' as 'idle' | 'armed' | 'done')
 
-const guard = async <T,>(
+// Runs a hook body and returns its fallback on any throw. Top-level function declaration because
+// `$` is passed to it (plugin validate rule).
+async function guard<T>(
   $: EngineInterface,
   name: string,
   fallback: T | (() => T),
   body: () => Promise<T> | T,
-): Promise<T> => {
+): Promise<T> {
   try {
     return await body()
   } catch (error) {
