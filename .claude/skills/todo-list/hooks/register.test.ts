@@ -612,7 +612,7 @@ test('Notification is logged by type only, and the call result is unchanged', as
 // `claude plugin test` registration does not run, so each test first sends a prompt.compose that
 // lists the plan tool, which stores the name and marks it offered. Edit and Bash are stubbed
 // beneath the mod, and toasts are recorded.
-type Corrupt = { task: boolean; toast: boolean; plan?: boolean }
+type Corrupt = { task: boolean; toast: boolean; plan?: boolean; hold?: number }
 const gateSetup = async (
   $: Engine,
   on: On,
@@ -633,6 +633,10 @@ const gateSetup = async (
     // cleared on the first read would let the retry succeed. It stays malformed until the plan guard
     // has logged its failure, and clears itself at the next read.
     if (corrupt.plan && logs.some(line => line.startsWith('todo-list: plan tool threw'))) corrupt.plan = false
+    if (e.key === 'dropShown' && corrupt.hold !== undefined && corrupt.hold > 0) {
+      corrupt.hold -= 1
+      for (let tick = 0; tick < 200; tick++) await Promise.resolve()
+    }
     if (corrupt.plan && e.key === 'plan') return { value: { value: null, version: 1 } }
 
     return corrupt.task && e.key === 'task' ? { value: { value: null, version: 1 } } : next(e)
@@ -852,9 +856,13 @@ test('drop toast: the toast text carries no subject or title from the input', as
   expect(toasts[0]).not.toMatch(/\d/)
 })
 
-test('drop toast: two concurrent failures show one toast', async ($, on) => {
+test('drop toast: two concurrent failures show one toast, even when both read the flag as false', async ($, on) => {
   stubTasks(on)
-  const { toasts } = await gateSetup($, on)
+  // `hold` makes the first two reads of the flag wait, so both callers see false before either
+  // writes. Only a compare-and-set claim then lets exactly one of them toast; a read-then-write
+  // would toast twice.
+  const corrupt: Corrupt = { task: false, toast: false, hold: 2 }
+  const { toasts } = await gateSetup($, on, corrupt)
   await fullPlan($)
   await Promise.all([
     finish($, 'TaskCreate', { subject: 'A' }, { task: { id: '8', subject: 'A' } }),
