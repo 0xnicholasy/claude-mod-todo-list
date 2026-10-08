@@ -1,4 +1,12 @@
-# Todo List for Claude Code
+<div align="center">
+  <img src=".claude/skills/todo-list/.claude-plugin/icon.png" alt="Todo List icon" width="120" height="120">
+  <h1>Todo List for Claude Code</h1>
+  <p>Claude's task plan as a live tree in a pane and the status line.</p>
+
+  [![CI](https://github.com/0xnicholasy/claude-mod-todo-list/actions/workflows/ci.yml/badge.svg)](https://github.com/0xnicholasy/claude-mod-todo-list/actions/workflows/ci.yml) ![Version](https://img.shields.io/github/package-json/v/0xnicholasy/claude-mod-todo-list?filename=.claude%2Fskills%2Ftodo-list%2F.claude-plugin%2Fplugin.json&label=version) [![License](https://img.shields.io/github/license/0xnicholasy/claude-mod-todo-list)](LICENSE) [![Stars](https://img.shields.io/github/stars/0xnicholasy/claude-mod-todo-list?style=flat)](https://github.com/0xnicholasy/claude-mod-todo-list/stargazers)
+
+  <a href="#installation">Install</a> · <a href="#usage">Usage</a> · <a href="#configuration">Configuration</a> · <a href="#how-it-works-hooks">How it works</a>
+</div>
 
 Todo List is a Claude Code plugin that shows Claude's task plan as a tree in a pane and the status line, with live activity. Claude writes the plan through a plugin tool, `mcp__todo-list__plan`, and state-changing tools wait until a plan exists.
 
@@ -157,6 +165,9 @@ A color saved with `/todo color` takes precedence over `accentColor`. The `claud
 
 The plugin registers 20 hooks in `.claude/skills/todo-list/hooks/register.tsx`. Two of them decide anything: the catch-all `tool.call` hook (the gate) and the `tool.call` hook for the plan tool (it answers calls to that one tool). Hooks pass the host's event or result through unchanged except where the last column says otherwise. A hook that throws is caught and logged to the debug log, and the call proceeds as if the plugin were not there.
 
+<details>
+<summary>All 20 hooks</summary>
+
 | Hook | What it does | What it decides, and when | What it changes |
 |---|---|---|---|
 | `session.start` | Loads the saved accent color, registers the plan tool and the `/todo` command, and on an interactive terminal arms the first-prompt pane open and opens the pane. | Nothing. | Registers the plan tool and `/todo`; opens the pane; invalidates the cached `tool.describe` answer. |
@@ -181,6 +192,8 @@ The plugin registers 20 hooks in `.claude/skills/todo-list/hooks/register.tsx`. 
 | `ui.render` (`Pane`, `todo`) | Draws the plan tree. If the terminal size, placement or plan height changed, re-opens the pane so the host resizes it. | Nothing. | Returns the pane contents. May close and reopen the pane. |
 
 Observe-only hooks: `classic.PermissionRequest`, `classic.SubagentStart`, `classic.SubagentStop`, `classic.StopFailure`, `classic.Notification`, `classic.PreCompact`, `classic.PostCompact`, `classic.PostToolUse`, `classic.PostToolUseFailure`, `turn.complete`, `session.end`. They update the plugin's own activity state and pass the host's event through unchanged. `classic.PostToolUse` also copies a finished `TaskCreate`, `TaskUpdate` or `TodoWrite` into the plan; it never changes the tool's result.
+
+</details>
 
 ## Data and privacy
 
@@ -218,6 +231,16 @@ npm run check
 - With parallel tool calls, the status drops back to Working as soon as the first call finishes.
 - A subagent's permission prompt shows as the main session waiting for permission.
 - Dialogs cover the pane.
+
+## Star history
+
+<a href="https://star-history.com/#0xnicholasy/claude-mod-todo-list&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=0xnicholasy/claude-mod-todo-list&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=0xnicholasy/claude-mod-todo-list&type=Date" />
+    <img alt="Star history chart" src="https://api.star-history.com/svg?repos=0xnicholasy/claude-mod-todo-list&type=Date" />
+  </picture>
+</a>
 
 ## License
 
