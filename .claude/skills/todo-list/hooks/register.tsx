@@ -5,8 +5,8 @@ import { emptyActivity, reduceActivity } from './activity'
 import type { ActivityEvent } from './activity'
 import { needsRefit } from './fit'
 import type { PaneFit } from './fit'
-import type { GateDecision } from './gate'
-import { decideGate, INSTRUCTION_ID, INSTRUCTION_TEXT, MAX_DENIES, onNewPrompt, onPlanTouched, planContext } from './gate'
+import type { GateDecision, GateTransition } from './gate'
+import { INSTRUCTION_ID, INSTRUCTION_TEXT, onNewPrompt, onPlanTouched, planContext, transition } from './gate'
 import { DROPPED_NOT_MIRRORED, DROPPED_UNRECOGNISED, ingestTaskCreate, ingestTaskUpdate, ingestTodoWrite } from './ingest'
 import type { IngestResult } from './ingest'
 import { emptyPlan } from './plan'
@@ -211,8 +211,8 @@ function safeToast($: EngineInterface, text: string): void {
 // (turn.start resets it); after MAX_DENIES the gate pauses, and the pause toast shows once
 // because the pausing call moves `denies` past MAX_DENIES.
 async function runGate($: EngineInterface, tool: string, enforceConfig: boolean): Promise<GateDecision> {
-  const [stored, session, t] = await Promise.all([read($, planTool), read($, enforceSession), read($, task)])
-  const decision = decideGate({
+  const [stored, session, snapshot] = await Promise.all([read($, planTool), read($, enforceSession), read($, task)])
+  const input = {
     tool,
     isPlanTool: false,
     planToolName: stored.name ?? PLAN_TOOL_FULL_NAME,
@@ -220,18 +220,25 @@ async function runGate($: EngineInterface, tool: string, enforceConfig: boolean)
     enforceSession: session,
     toolRegistered: stored.name !== null,
     toolOffered: stored.offered,
-    planned: t.planned,
-    denies: t.denies,
-  })
-  if (decision.kind === 'deny') {
-    await update($, task, cur => ({ ...cur, denies: cur.denies + 1 }))
-    if (t.denies === 0) safeToast($, `Blocked ${tool}: no plan yet. /todo off turns this off.`)
-  } else if (decision.kind === 'pause' && t.denies === MAX_DENIES) {
-    await update($, task, cur => ({ ...cur, denies: cur.denies + 1 }))
-    safeToast($, decision.toast)
   }
+  // Fast path: within a turn `planned` only goes false to true, so a snapshot that allows with no
+  // denies counted is final and needs no write. Any other snapshot goes through the transition.
+  const early = transition({ ...snapshot, denies: 0 }, input)
+  if (early.decision.kind === 'allow') return early.decision
+  // The decision and the deny count come from one transition on the value the write is checked
+  // against. `update` reruns the reducer when its write misses ifVersion, so `out` is reassigned on
+  // every attempt and only the attempt that landed is acted on. Toasts fire after update resolves.
+  let out: GateTransition | undefined
+  await update($, task, cur => {
+    out = transition(cur, input)
 
-  return decision
+    return out.next
+  })
+  if (out === undefined) return { kind: 'allow' }
+  if (out.toast === 'deny') safeToast($, `Blocked ${tool}: no plan yet. /todo off turns this off.`)
+  else if (out.toast === 'pause' && out.decision.kind === 'pause') safeToast($, out.decision.toast)
+
+  return out.decision
 }
 
 // Tells the person once per session that a task call was not mirrored. The reason is one of the

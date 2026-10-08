@@ -796,6 +796,16 @@ test('gate: the 4th blocked call in a turn is allowed, and the toast shows once 
   expect(toasts).toHaveLength(3)
 })
 
+test('gate: four concurrent blocked calls give exactly three denies, one deny toast and one pause toast', async ($, on) => {
+  const { toasts } = await gateSetup($, on)
+  await $.turn.start({ text: 'edit a file', turnId: 't1' })
+  const outs = await Promise.all([$.tool.call(EDIT), $.tool.call(EDIT), $.tool.call(EDIT), $.tool.call(EDIT)])
+  expect(outs.filter(isDenied)).toHaveLength(3)
+  expect(outs.filter(out => out.result === 'edited')).toHaveLength(1)
+  expect(toasts.filter(text => text.startsWith('Blocked Edit'))).toHaveLength(1)
+  expect(toasts.filter(text => text === 'Plan enforcement paused for this turn')).toHaveLength(1)
+})
+
 test('gate: a throwing toast does not change the deny', async ($, on) => {
   const corrupt = { task: false, toast: true }
   await gateSetup($, on, corrupt)

@@ -2,7 +2,7 @@
 
 ultraplan: harden-concurrency | branch: feat/harden-concurrency | base: main | tag: pre-harden-concurrency-main | created: 2026-10-08
 Status: ACTIVE
-Progress: 7/9 done
+Progress: 8/9 done
 
 ## Goal
 The mod must behave correctly when Claude runs tool calls in parallel and when a write or a mirror fails. Specifically:
@@ -139,7 +139,7 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 - verify: `rtk proxy npm run check`; `npm ci && npm run typecheck`; live: `claude --plugin-dir .claude/skills/todo-list`. In one message, ask for one Agent call and one Bash call in parallel. Read the status line: it shows Running until both end. Record the observed lines in the PR body and in the Log.
 
 ### T08 Make the gate decision and the deny count one atomic transition
-- status: todo
+- status: done (#34, 2026-10-08)
 - needs: T07, T04
 - size: M
 - scope: In `runGate` (register.tsx:209-231), `t` comes from a snapshot read (:210), and the decision and toasts use the stale `t` (:223-225). Rewrite as follows:
@@ -179,3 +179,4 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 - 2026-10-08 T05 done: an unknown-id TaskUpdate returns { ignored: IGNORED_UNKNOWN_TASK }; mirror() debug-logs it and skips onPlanTouched and the status refresh, so the gate stays closed and no toast fires (#31)
 - 2026-10-08 T06 done: reportDrop() toasts once per session ('Plan not updated: <fixed reason>') when a mirror is dropped or a response is not recognised; the once-flag is a CAS dropShown atom, reset on /clear (#32)
 - 2026-10-08 T07 done: tool_use_id now keys toolStart and toolEnd, so a parallel batch keeps Running until its last call ends; live check showed `Running Bash · 1 subagent`, then `Running Bash` after the Agent call and subagent ended, then `Working` once Bash ended (#33)
+- 2026-10-08 T08 done: runGate now runs transition() inside one update() on the task atom and toasts from its result after update resolves, so a concurrent batch gets exactly MAX_DENIES denies, one deny toast and one pause toast; a snapshot allow skips the write (#34)
