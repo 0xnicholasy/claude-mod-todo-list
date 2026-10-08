@@ -2,6 +2,7 @@ import type { CommandRunInput, EngineInterface, On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 import { denyText } from './gate'
+import { DROPPED_NOT_MIRRORED, DROPPED_UNRECOGNISED } from './ingest'
 import { DEFAULT_ACCENT } from './tree'
 
 // The plan tool is called by its literal name: $.tool.register is not available under
@@ -611,7 +612,7 @@ test('Notification is logged by type only, and the call result is unchanged', as
 // `claude plugin test` registration does not run, so each test first sends a prompt.compose that
 // lists the plan tool, which stores the name and marks it offered. Edit and Bash are stubbed
 // beneath the mod, and toasts are recorded.
-type Corrupt = { task: boolean; toast: boolean; plan?: boolean }
+type Corrupt = { task: boolean; toast: boolean; plan?: boolean; hold?: number }
 const gateSetup = async (
   $: Engine,
   on: On,
@@ -632,6 +633,10 @@ const gateSetup = async (
     // cleared on the first read would let the retry succeed. It stays malformed until the plan guard
     // has logged its failure, and clears itself at the next read.
     if (corrupt.plan && logs.some(line => line.startsWith('todo-list: plan tool threw'))) corrupt.plan = false
+    if (e.key === 'dropShown' && corrupt.hold !== undefined && corrupt.hold > 0) {
+      corrupt.hold -= 1
+      for (let tick = 0; tick < 200; tick++) await Promise.resolve()
+    }
     if (corrupt.plan && e.key === 'plan') return { value: { value: null, version: 1 } }
 
     return corrupt.task && e.key === 'task' ? { value: { value: null, version: 1 } } : next(e)
@@ -753,7 +758,7 @@ test('gate: a throwing toast does not change the deny', async ($, on) => {
 // the plan atom after it is armed: it writes `swap(previous)` in its place and answers isSet false,
 // as if another PostToolUse had written first. The start plan holds `count` skipped leaves, so
 // the plan is finished and a new turn starts unplanned.
-const missSetup = async ($: Engine, on: On, count: number, swapTo: number): Promise<{ statuses: Array<string | undefined>; logs: string[] }> => {
+const missSetup = async ($: Engine, on: On, count: number, swapTo: number): Promise<{ statuses: Array<string | undefined>; logs: string[]; toasts: string[] }> => {
   const armed = { value: false }
   stubTasks(on)
   on('state.set', async (_$, e, next) => {
@@ -815,6 +820,99 @@ test('mirror: a TaskUpdate for an unknown id is ignored, so the gate stays close
   expect(logs.filter(line => line.includes('not mirrored'))).toEqual([])
   expect(isDenied(await $.tool.call(EDIT))).toBe(true)
   expect(toasts).toEqual(['Blocked Edit: no plan yet. /todo off turns this off.'])
+})
+
+// The dropped-mirror toast (T06): one toast per session, a fixed reason, never the task text.
+const dropToast = (reason: string): string => `Plan not updated: ${reason}`
+const nodeTitles = Array.from({ length: 60 }, (_, i) => ({ title: `Step ${i + 1}` }))
+const fullPlan = async ($: Engine): Promise<string> => {
+  await $.tool.call({ tool: TOOL, op: 'set', title: 'Big plan', nodes: nodeTitles })
+
+  return String((await $.tool.call(SHOW)).result)
+}
+const clearSession = (
+  $: Engine,
+  reason: 'clear' | 'other',
+): ReturnType<Engine['session']['end']> =>
+  $.session.end({ reason, sessionId: 's1', resume: { id: 's1' } } as Parameters<typeof $.session.end>[0])
+
+test('drop toast: a 60-node plan plus TaskCreate shows one toast and leaves the plan unchanged', async ($, on) => {
+  stubTasks(on)
+  const { toasts } = await gateSetup($, on)
+  const before = await fullPlan($)
+  await finish($, 'TaskCreate', { subject: 'Write docs' }, CREATED)
+  expect(toasts).toEqual([dropToast(DROPPED_NOT_MIRRORED)])
+  expect(String((await $.tool.call(SHOW)).result)).toBe(before)
+})
+
+test('drop toast: the toast text carries no subject or title from the input', async ($, on) => {
+  stubTasks(on)
+  const { toasts } = await gateSetup($, on)
+  await fullPlan($)
+  await finish($, 'TaskCreate', { subject: 'Quarterly-secret-subject' }, { task: { id: '8', subject: 'Quarterly-secret-subject' } })
+  expect(toasts).toHaveLength(1)
+  expect(toasts[0]).not.toContain('Quarterly-secret-subject')
+  expect(toasts[0]).not.toContain('Step 1')
+  expect(toasts[0]).not.toMatch(/\d/)
+})
+
+test('drop toast: two concurrent failures show one toast, even when both read the flag as false', async ($, on) => {
+  stubTasks(on)
+  // `hold` makes the first two reads of the flag wait, so both callers see false before either
+  // writes. Only a compare-and-set claim then lets exactly one of them toast; a read-then-write
+  // would toast twice.
+  const corrupt: Corrupt = { task: false, toast: false, hold: 2 }
+  const { toasts } = await gateSetup($, on, corrupt)
+  await fullPlan($)
+  await Promise.all([
+    finish($, 'TaskCreate', { subject: 'A' }, { task: { id: '8', subject: 'A' } }),
+    finish($, 'TaskCreate', { subject: 'B' }, { task: { id: '9', subject: 'B' } }),
+  ])
+  expect(toasts).toEqual([dropToast(DROPPED_NOT_MIRRORED)])
+})
+
+test('drop toast: a failure that fits on the retry shows no toast', async ($, on) => {
+  const { toasts, logs } = await missSetup($, on, 60, 30)
+  await finish($, 'TaskCreate', { subject: 'Write docs', activeForm: 'Writing docs' }, CREATED)
+  expect(String((await $.tool.call(SHOW)).result)).toContain('Write docs')
+  expect(logs.filter(line => line.includes('not mirrored'))).toEqual([])
+  expect(toasts.filter(text => text.startsWith('Plan not updated'))).toEqual([])
+})
+
+test('drop toast: an unrecognised TaskCreate response shows one toast', async ($, on) => {
+  stubTasks(on)
+  const { toasts, logs } = await gateSetup($, on)
+  await finish($, 'TaskCreate', { subject: 'Write docs' }, { unexpected: true })
+  await finish($, 'TaskCreate', { subject: 'Write docs' }, { unexpected: true })
+  expect(logs.filter(line => line.includes('response not recognised'))).toHaveLength(2)
+  expect(toasts).toEqual([dropToast(DROPPED_UNRECOGNISED)])
+})
+
+test('drop toast: a TaskUpdate the tool reported as failed shows no toast and keeps the slot', async ($, on) => {
+  stubTasks(on)
+  const { toasts, logs } = await gateSetup($, on)
+  await finish($, 'TaskUpdate', { taskId: '5', status: 'completed' }, { success: false, taskId: '5' })
+  expect(logs.filter(line => line.includes('reported failure'))).toHaveLength(1)
+  expect(toasts.filter(text => text.startsWith('Plan not updated'))).toEqual([])
+  await finish($, 'TaskCreate', { subject: 'Write docs' }, { unexpected: true })
+  expect(toasts).toEqual([dropToast(DROPPED_UNRECOGNISED)])
+})
+
+test('drop toast: a session clear re-arms it, any other session end does not', async ($, on) => {
+  stubTasks(on)
+  on('session.end', async (_$, e) => ({ sessionId: e.sessionId }))
+  const { toasts } = await gateSetup($, on)
+  await fullPlan($)
+  const fail = (): ReturnType<typeof finish> => finish($, 'TaskCreate', { subject: 'Write docs' }, CREATED)
+  await fail()
+  expect(toasts).toHaveLength(1)
+  await clearSession($, 'other')
+  await fail()
+  expect(toasts).toHaveLength(1)
+  await clearSession($, 'clear')
+  // The host resets the plan on /clear too; the test engine does not, so the plan is still full.
+  await fail()
+  expect(toasts).toEqual([dropToast(DROPPED_NOT_MIRRORED), dropToast(DROPPED_NOT_MIRRORED)])
 })
 
 // Draws the pane and returns the element tree as JSON, so a test can look for a colour.

@@ -7,7 +7,7 @@ import { needsRefit } from './fit'
 import type { PaneFit } from './fit'
 import type { GateDecision } from './gate'
 import { decideGate, INSTRUCTION_ID, INSTRUCTION_TEXT, MAX_DENIES, onNewPrompt, onPlanTouched, planContext } from './gate'
-import { ingestTaskCreate, ingestTaskUpdate, ingestTodoWrite } from './ingest'
+import { DROPPED_NOT_MIRRORED, DROPPED_UNRECOGNISED, ingestTaskCreate, ingestTaskUpdate, ingestTodoWrite } from './ingest'
 import type { IngestResult } from './ingest'
 import { emptyPlan } from './plan'
 import type { PlanApplied } from './plan-tool'
@@ -20,7 +20,7 @@ import {
   PLAN_TOOL_SHORT_NAME,
   touchesPlan,
 } from './plan-tool'
-import { taskCreateFrom, taskUpdateFrom, todosFrom } from './post-tool'
+import { taskCreateFrom, taskUpdateFailed, taskUpdateFrom, todosFrom } from './post-tool'
 import { clean } from './sanitize'
 import { ACCENT_STORE_KEY, resolveAccent, validAccent } from './accent'
 import { buildTree, DEFAULT_WIDTH, paneRows, statusLine } from './tree'
@@ -51,6 +51,10 @@ const enforceSession = atom({ plugin: 'todo-list', key: 'enforceSession' } as co
 // The accent set by `/todo color`, loaded from the plugin store at session start so it applies to
 // every session; null defers to the plugin option `accentColor`.
 const accentOverride = atom({ plugin: 'todo-list', key: 'accentOverride' } as const, null as string | null)
+// Whether the dropped-mirror toast has shown this session. Claimed with a compare-and-set update so
+// only one of several concurrent drops toasts. The host resets atoms on /clear (T01 Q7), and the
+// session.end clear path resets it too.
+const dropShown = atom({ plugin: 'todo-list', key: 'dropShown' } as const, false as boolean)
 const planTool = atom({ plugin: 'todo-list', key: 'planTool' } as const, {
   name: null,
   offered: false,
@@ -230,6 +234,26 @@ async function runGate($: EngineInterface, tool: string, enforceConfig: boolean)
   return decision
 }
 
+// Tells the person once per session that a task call was not mirrored. The reason is one of the
+// fixed DROPPED_* strings. Must run after the mirror's own update() has resolved, never inside a
+// reducer. `update` reruns the reducer when its write misses ifVersion, so `won` is reassigned on
+// every attempt and only the attempt that flipped false to true toasts.
+async function reportDrop($: EngineInterface, reason: string): Promise<void> {
+  let won = false
+  await update($, dropShown, cur => {
+    won = !cur
+
+    return true
+  })
+  if (won) safeToast($, `Plan not updated: ${reason}`)
+}
+
+// A tool response the narrowing does not know: logged with detail, and reported once.
+async function dropUnrecognised($: EngineInterface, name: string): Promise<void> {
+  debugLog($, `todo-list: ${name} response not recognised, not mirrored`)
+  await reportDrop($, DROPPED_UNRECOGNISED)
+}
+
 // Answers a call to the plan tool with the text the model reads. The plan tool's tool.call hook
 // answers itself and never calls next(e) (T01 Q1/Q3): a result from the hook reaches the model
 // verbatim, and an error is result text starting "Error:".
@@ -279,6 +303,7 @@ async function mirror($: EngineInterface, name: string, apply: (cur: Plan, now: 
   })
   if (outcome.kind === 'failed') {
     $.ui.log(`todo-list: ${name} not mirrored: ${outcome.text}`, { to: 'debug' })
+    await reportDrop($, DROPPED_NOT_MIRRORED)
 
     return
   }
@@ -320,15 +345,17 @@ async function afterTool(
   if (agentId !== undefined) return
   if (tool === 'TaskCreate') {
     const created = taskCreateFrom(input, response)
-    if (created === null) return debugLog($, 'todo-list: TaskCreate response not recognised, not mirrored')
+    if (created === null) return dropUnrecognised($, 'TaskCreate')
     await mirror($, 'TaskCreate', (cur, now) => ingestTaskCreate(cur, created, now))
   } else if (tool === 'TaskUpdate') {
+    // The tool said the update failed: nothing to mirror and nothing to report.
+    if (taskUpdateFailed(response)) return debugLog($, 'todo-list: TaskUpdate reported failure, not mirrored')
     const updated = taskUpdateFrom(input, response)
-    if (updated === null) return debugLog($, 'todo-list: TaskUpdate response not recognised, not mirrored')
+    if (updated === null) return dropUnrecognised($, 'TaskUpdate')
     await mirror($, 'TaskUpdate', (cur, now) => ingestTaskUpdate(cur, updated, now))
   } else if (tool === 'TodoWrite') {
     const todos = todosFrom(input, response)
-    if (todos === null) return debugLog($, 'todo-list: TodoWrite response not recognised, not mirrored')
+    if (todos === null) return dropUnrecognised($, 'TodoWrite')
     await mirror($, 'TodoWrite', (cur, now) => ingestTodoWrite(cur, todos, now))
   }
 }
@@ -467,6 +494,7 @@ export const register: Register = (on, options) => {
   on('session.end', async ($, e, next) => {
     if (e.reason === 'clear') {
       await guard($, 'session.end', undefined, () => applyActivity($, { type: 'sessionClear' }))
+      await guard($, 'session.end', undefined, () => update($, dropShown, () => false))
     }
 
     return next(e)

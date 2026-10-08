@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { IGNORED_UNKNOWN_TASK, ingestTaskCreate, ingestTaskUpdate, ingestTodoWrite } from './ingest'
+import { DROPPED_NOT_MIRRORED, DROPPED_UNRECOGNISED, IGNORED_UNKNOWN_TASK, ingestTaskCreate, ingestTaskUpdate, ingestTodoWrite } from './ingest'
 import { addNodes, emptyPlan, MAX_NODES, progress, removeNode, setPlan } from './plan'
 import type { Plan } from './plan'
 import type { IngestResult } from './ingest'
@@ -95,4 +95,18 @@ test('mirroring respects the node limit', () => {
   let plan = emptyPlan()
   for (let i = 0; i < MAX_NODES; i++) plan = ok(ingestTaskCreate(plan, { id: `${i}`, subject: `t${i}` }, 1))
   expect('error' in ingestTaskCreate(plan, { id: 'x', subject: 'one more' }, 2)).toBe(true)
+})
+
+test('the dropped-mirror reasons are fixed strings with no input text in them', () => {
+  const subject = 'Sentinel-subject-9f3'
+  let plan = emptyPlan()
+  for (let i = 0; i < MAX_NODES; i++) plan = ok(ingestTaskCreate(plan, { id: `${i}`, subject: `t${i}` }, 1))
+  const failed = ingestTaskCreate(plan, { id: 'x', subject }, 2)
+  if (!('error' in failed)) throw new Error('expected the node limit to reject the call')
+  for (const reason of [DROPPED_NOT_MIRRORED, DROPPED_UNRECOGNISED]) {
+    expect(reason).not.toContain(subject)
+    expect(reason).not.toContain(failed.error)
+    expect(reason).not.toMatch(/\d/)
+  }
+  expect(DROPPED_NOT_MIRRORED).not.toBe(DROPPED_UNRECOGNISED)
 })

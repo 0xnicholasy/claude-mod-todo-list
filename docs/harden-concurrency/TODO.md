@@ -2,7 +2,7 @@
 
 ultraplan: harden-concurrency | branch: feat/harden-concurrency | base: main | tag: pre-harden-concurrency-main | created: 2026-10-08
 Status: ACTIVE
-Progress: 5/9 done
+Progress: 6/9 done
 
 ## Goal
 The mod must behave correctly when Claude runs tool calls in parallel and when a write or a mirror fails. Specifically:
@@ -33,6 +33,7 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 - D2 No enabler PR: `.github/workflows/ci.yml` already runs on `feat/**` (lines 4, 6). | confirmed by T01 (CI ran on PR #26)
 - D3 No self-heal for dropped mirrors. A status-only update cannot rebuild a title, and late updates can bring deleted tasks back. (owner reviewer, 2026-10-08)
 - D4 `activity.running` entries are `Array<{ id: string; tool: string }>`, not `string[]`. Three needs drive this: the label must fall back to the previous still-running call's name when the newest ends, the name fallback must work, and a start without an id gets a synthetic id `name:<tool>`. | confirmed by T03
+- D5 Codex hit its usage limit on 2026-10-08 (T05). From T06 on, the blind independent review is a fable code-reviewer instead of the codex subagent, and T05 (#31) got a retroactive fable review. (owner, 2026-10-08)
 
 ## Todos
 
@@ -103,7 +104,7 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 - verify: `rtk proxy npm run check`; `npm ci && npm run typecheck`
 
 ### T06 Show a dropped mirror once per session
-- status: todo
+- status: done (#32, 2026-10-08)
 - needs: T05, T03
 - size: M
 - scope:
@@ -174,3 +175,4 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 - 2026-10-08 T03 done: the activity reducer tracks running calls by id with a name fallback; the label is the newest running call and the phase drops to working only when none remain (#29)
 - 2026-10-08 T04 done: gate.ts gains a pure transition(cur, input) returning next, decision and toast; deny/pause counting matches runGate and is walked 0 through 5 in gate.test.ts (#30)
 - 2026-10-08 T05 done: an unknown-id TaskUpdate returns { ignored: IGNORED_UNKNOWN_TASK }; mirror() debug-logs it and skips onPlanTouched and the status refresh, so the gate stays closed and no toast fires (#31)
+- 2026-10-08 T06 done: reportDrop() toasts once per session ('Plan not updated: <fixed reason>') when a mirror is dropped or a response is not recognised; the once-flag is a CAS dropShown atom, reset on /clear (#32)

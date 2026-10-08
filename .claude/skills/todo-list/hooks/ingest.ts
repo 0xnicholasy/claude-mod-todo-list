@@ -22,6 +22,11 @@ export type Ignored = { ignored: string }
 export type IngestResult = PlanResult | Ignored
 export const IGNORED_UNKNOWN_TASK = 'task id not in the plan'
 
+// Why a mirror was dropped, as shown in the once-per-session toast. Fixed strings: they must never
+// carry the subject, a title or the ingest error text, which can hold user content.
+export const DROPPED_NOT_MIRRORED = 'a task was not mirrored to the plan'
+export const DROPPED_UNRECOGNISED = 'a task response was not recognised, so it was not mirrored'
+
 type NewLeaf = { title: string; activeForm?: string; status: PlanStatus; externalId?: string }
 
 const withSource = (plan: Plan, source: PlanSource, leaves: readonly NewLeaf[], now: number, kept: PlanNode[]): PlanResult => {
