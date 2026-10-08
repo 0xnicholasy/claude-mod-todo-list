@@ -8,8 +8,8 @@ import type { PaneFit } from './fit'
 import type { GateDecision } from './gate'
 import { decideGate, INSTRUCTION_ID, INSTRUCTION_TEXT, MAX_DENIES, onNewPrompt, onPlanTouched, planContext } from './gate'
 import { ingestTaskCreate, ingestTaskUpdate, ingestTodoWrite } from './ingest'
+import type { IngestResult } from './ingest'
 import { emptyPlan } from './plan'
-import type { PlanResult } from './plan'
 import type { PlanApplied } from './plan-tool'
 import {
   applyPlanOp,
@@ -253,21 +253,37 @@ async function answerPlanCall($: EngineInterface, input: unknown, agentId: strin
 }
 
 // Mirrors a successful TaskCreate/TaskUpdate/TodoWrite call into the plan (D10). The call has
-// already run; a rejected mapping (a limit, say) leaves the plan alone and is only logged.
-async function mirror($: EngineInterface, name: string, apply: (cur: Plan, now: number) => PlanResult): Promise<void> {
+// already run; a rejected mapping (a limit, say) leaves the plan alone and is only logged. An
+// ignored call (a TaskUpdate for an id the plan does not hold) is also only logged: it changes
+// nothing, so it neither counts as having a plan nor redraws the status line.
+async function mirror($: EngineInterface, name: string, apply: (cur: Plan, now: number) => IngestResult): Promise<void> {
   const now = await $.clock.now()
   // `update` runs the reducer again when its write misses ifVersion, so every attempt assigns the
-  // whole outcome: an error from an earlier attempt must not outlive a retry that succeeds.
-  let outcome = { failure: 'plan unchanged' } as { failure: string | null }
+  // whole outcome: a result from an earlier attempt must not outlive a retry that differs.
+  let outcome = { kind: 'failed', text: 'plan unchanged' } as { kind: 'ok' | 'failed' | 'ignored'; text: string }
   await update($, plan, (cur: Plan) => {
     const out = apply(cur, now)
-    outcome = 'error' in out ? { failure: out.error } : { failure: null }
+    if ('error' in out) {
+      outcome = { kind: 'failed', text: out.error }
 
-    return 'error' in out ? cur : out.plan
+      return cur
+    }
+    if ('ignored' in out) {
+      outcome = { kind: 'ignored', text: out.ignored }
+
+      return cur
+    }
+    outcome = { kind: 'ok', text: '' }
+
+    return out.plan
   })
-  const { failure } = outcome
-  if (failure !== null) {
-    $.ui.log(`todo-list: ${name} not mirrored: ${failure}`, { to: 'debug' })
+  if (outcome.kind === 'failed') {
+    $.ui.log(`todo-list: ${name} not mirrored: ${outcome.text}`, { to: 'debug' })
+
+    return
+  }
+  if (outcome.kind === 'ignored') {
+    $.ui.log(`todo-list: ${name} ignored: ${outcome.text}`, { to: 'debug' })
 
     return
   }
