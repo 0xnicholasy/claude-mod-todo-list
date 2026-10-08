@@ -30,14 +30,14 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 
 ## Decisions
 - D1 Land once at the end. The owner merges the landing PR into main. (owner, 2026-10-08)
-- D2 No enabler PR: `.github/workflows/ci.yml` already runs on `feat/**` (lines 4, 6). | assumed, confirm by T01 (CI run on the branch's first push)
+- D2 No enabler PR: `.github/workflows/ci.yml` already runs on `feat/**` (lines 4, 6). | confirmed by T01 (CI ran on PR #26)
 - D3 No self-heal for dropped mirrors. A status-only update cannot rebuild a title, and late updates can bring deleted tasks back. (owner reviewer, 2026-10-08)
 - D4 `activity.running` entries are `Array<{ id: string; tool: string }>`, not `string[]`. Three needs drive this: the label must fall back to the previous still-running call's name when the newest ends, the name fallback must work, and a start without an id gets a synthetic id `name:<tool>`. | assumed, confirm by T03
 
 ## Todos
 
 ### T01 Lock the plan-tool failure path with a test
-- status: done (#PR, 2026-10-08)
+- status: done (#26, 2026-10-08)
 - needs: none
 - size: S
 - scope: Extend the gateSetup corruption seam (register.test.ts:614-625) to cover the `plan` atom as a one-shot. The first `state.get` for key `plan` returns a malformed value and then the flag clears itself. Add `plan` to the `corrupt` shape as an optional field so the two existing callers (`{ task: false, toast: false }` at :680, :719) keep compiling. Add one case that does these steps in order: (1) turn.start; (2) a plan `set` call; (3) assert the result equals `'Error: the plan tool failed. Try again.'` (register.tsx:494); (4) a following `{ op: 'show' }` reports "No plan yet"; (5) Edit is still denied. Mitigations: the seam must be one-shot. Do a mutation check: move `await update($, task, onPlanTouched)` above the plan `update` in `answerPlanCall` (register.tsx:243-249), show that the new test fails, then restore. Test-only change.
@@ -165,4 +165,4 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 ## Backlog
 
 ## Log
-- 2026-10-08 T01 done: plan-tool failure path locked by a register.test.ts case; mutation check failed as expected (#PR)
+- 2026-10-08 T01 done: plan-tool failure path locked by a register.test.ts case; mutation check failed as expected (#26)
