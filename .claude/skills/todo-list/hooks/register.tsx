@@ -256,17 +256,16 @@ async function answerPlanCall($: EngineInterface, input: unknown, agentId: strin
 // already run; a rejected mapping (a limit, say) leaves the plan alone and is only logged.
 async function mirror($: EngineInterface, name: string, apply: (cur: Plan, now: number) => PlanResult): Promise<void> {
   const now = await $.clock.now()
-  let failure: string | null = null
+  // `update` runs the reducer again when its write misses ifVersion, so every attempt assigns the
+  // whole outcome: an error from an earlier attempt must not outlive a retry that succeeds.
+  let outcome = { failure: 'plan unchanged' } as { failure: string | null }
   await update($, plan, (cur: Plan) => {
     const out = apply(cur, now)
-    if ('error' in out) {
-      failure = out.error
+    outcome = 'error' in out ? { failure: out.error } : { failure: null }
 
-      return cur
-    }
-
-    return out.plan
+    return 'error' in out ? cur : out.plan
   })
+  const { failure } = outcome
   if (failure !== null) {
     $.ui.log(`todo-list: ${name} not mirrored: ${failure}`, { to: 'debug' })
 
