@@ -1,8 +1,8 @@
 # Concurrency and failure-path hardening
 
 ultraplan: harden-concurrency | branch: feat/harden-concurrency | base: main | tag: pre-harden-concurrency-main | created: 2026-10-08
-Status: ACTIVE
-Progress: 8/9 done
+Status: COMPLETE 2026-10-08, kept as backlog
+Progress: 9/9 done
 
 ## Goal
 The mod must behave correctly when Claude runs tool calls in parallel and when a write or a mirror fails. Specifically:
@@ -158,7 +158,7 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 - verify: `rtk proxy npm run check`; `npm ci && npm run typecheck`
 
 ### TZZ Cleanup and land
-- status: todo
+- status: done (#PR, 2026-10-08)
 - needs: every other todo
 - scope: run `/implement cleanup`
 - done when: skill removed from the branch, TODO.md archived, landing PR into main open and approved by the owner
@@ -180,3 +180,4 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 - 2026-10-08 T06 done: reportDrop() toasts once per session ('Plan not updated: <fixed reason>') when a mirror is dropped or a response is not recognised; the once-flag is a CAS dropShown atom, reset on /clear (#32)
 - 2026-10-08 T07 done: tool_use_id now keys toolStart and toolEnd, so a parallel batch keeps Running until its last call ends; live check showed `Running Bash · 1 subagent`, then `Running Bash` after the Agent call and subagent ended, then `Working` once Bash ended (#33)
 - 2026-10-08 T08 done: runGate now runs transition() inside one update() on the task atom and toasts from its result after update resolves, so a concurrent batch gets exactly MAX_DENIES denies, one deny toast and one pause toast; a snapshot allow skips the write (#34)
+- 2026-10-08 TZZ done: /implement skill removed, TODO archived as backlog, landing PR into main opened (#PR)
