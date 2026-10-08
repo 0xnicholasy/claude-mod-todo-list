@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { BLOCKED_TOOLS, MAX_DENIES, decideGate, denyText, INSTRUCTION_TEXT, onNewPrompt, onPlanTouched, planContext } from './gate'
+import { BLOCKED_TOOLS, MAX_DENIES, decideGate, denyText, INSTRUCTION_TEXT, onNewPrompt, onPlanTouched, planContext, transition } from './gate'
 import type { GateInput } from './gate'
 import { emptyPlan, setPlan } from './plan'
 import type { Plan } from './plan'
@@ -70,6 +70,52 @@ test('the call after 3 denies pauses with a toast', () => {
   const d = decideGate({ ...base, denies: MAX_DENIES })
   expect(d.kind).toBe('pause')
   if (d.kind === 'pause') expect(d.toast).toContain('paused')
+})
+
+const stepInput: Omit<GateInput, 'planned' | 'denies'> = {
+  tool: 'Edit',
+  isPlanTool: false,
+  planToolName: TOOL,
+  enforceConfig: true,
+  enforceSession: true,
+  toolRegistered: true,
+  toolOffered: true,
+}
+
+test('transition walks denies 0 through 5: deny, deny, deny, pause once, then silent pauses', () => {
+  const expected = [
+    { kind: 'deny', denies: 1, toast: 'deny' },
+    { kind: 'deny', denies: 2, toast: null },
+    { kind: 'deny', denies: 3, toast: null },
+    { kind: 'pause', denies: 4, toast: 'pause' },
+    { kind: 'pause', denies: 4, toast: null },
+    { kind: 'pause', denies: 5, toast: null },
+  ] as const
+  for (let denies = 0; denies <= 5; denies++) {
+    const cur = { open: true, planned: false, denies }
+    const r = transition(cur, stepInput)
+    const want = expected[denies]
+    expect(r.decision.kind).toBe(want?.kind)
+    expect(r.toast).toBe(want?.toast)
+    expect(r.next.denies).toBe(want?.denies)
+  }
+  const over = { open: true, planned: false, denies: MAX_DENIES + 1 }
+  expect(transition(over, stepInput).next).toBe(over)
+})
+
+test('transition leaves denies unchanged for planned, unoffered, enforcement-off and agentId inputs', () => {
+  const unplanned = { open: true, planned: false, denies: 2 }
+  const cases = [
+    transition({ ...unplanned, planned: true }, stepInput),
+    transition(unplanned, { ...stepInput, toolOffered: false }),
+    transition(unplanned, { ...stepInput, enforceSession: false }),
+    transition(unplanned, { ...stepInput, agentId: 'a1' }),
+  ]
+  for (const r of cases) {
+    expect(r.decision.kind).toBe('allow')
+    expect(r.next.denies).toBe(2)
+    expect(r.toast).toBeNull()
+  }
 })
 
 test('a new prompt is planned only when the plan has unfinished leaves', () => {

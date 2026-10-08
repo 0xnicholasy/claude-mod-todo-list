@@ -2,7 +2,7 @@
 
 ultraplan: harden-concurrency | branch: feat/harden-concurrency | base: main | tag: pre-harden-concurrency-main | created: 2026-10-08
 Status: ACTIVE
-Progress: 3/9 done
+Progress: 4/9 done
 
 ## Goal
 The mod must behave correctly when Claude runs tool calls in parallel and when a write or a mirror fails. Specifically:
@@ -80,7 +80,7 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 - verify: `rtk proxy npm run check`; `npm ci && npm run typecheck`
 
 ### T04 Extract a pure gate transition (decision plus deny count)
-- status: todo
+- status: done (#30, 2026-10-08)
 - needs: none
 - size: S
 - scope: In gate.ts, add `transition(cur: TaskState, input: Omit<GateInput, 'planned' | 'denies'>)`. It returns `{ next: TaskState; decision: GateDecision; toast: 'deny' | 'pause' | null }`. The decision is `decideGate({ ...input, planned: cur.planned, denies: cur.denies })` (gate.ts:45-54). Keep the decideGate ordering, so planned, offered, off and disabled inputs allow without an increment. Transitions:
@@ -172,3 +172,4 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 - 2026-10-08 T01 done: plan-tool failure path locked by a register.test.ts case; mutation check failed as expected (#26)
 - 2026-10-08 T02 done: mirror() reassigns its whole outcome on every CAS attempt; a forced-miss state.set seam covers error-then-success and success-then-error (#28)
 - 2026-10-08 T03 done: the activity reducer tracks running calls by id with a name fallback; the label is the newest running call and the phase drops to working only when none remain (#29)
+- 2026-10-08 T04 done: gate.ts gains a pure transition(cur, input) returning next, decision and toast; deny/pause counting matches runGate and is walked 0 through 5 in gate.test.ts (#30)
