@@ -54,6 +54,27 @@ export const decideGate = (input: GateInput): GateDecision => {
   return { kind: 'deny', message: denyText(input.tool, input.planToolName) }
 }
 
+export type GateTransition = {
+  next: TaskState
+  decision: GateDecision
+  toast: 'deny' | 'pause' | null
+}
+
+// The decision plus the deny count that follows it, as one pure step. A deny and the first pause
+// each add one to `denies`; the deny toast shows on the first deny and the pause toast once, because
+// the pausing call moves `denies` past MAX_DENIES. Allows and later pauses return `cur` itself.
+export function transition(cur: TaskState, input: Omit<GateInput, 'planned' | 'denies'>): GateTransition {
+  const decision = decideGate({ ...input, planned: cur.planned, denies: cur.denies })
+  if (decision.kind === 'deny') {
+    return { next: { ...cur, denies: cur.denies + 1 }, decision, toast: cur.denies === 0 ? 'deny' : null }
+  }
+  if (decision.kind === 'pause' && cur.denies === MAX_DENIES) {
+    return { next: { ...cur, denies: cur.denies + 1 }, decision, toast: 'pause' }
+  }
+
+  return { next: cur, decision, toast: null }
+}
+
 // D7 as revised: empty text and background-agent completions are continuations and change nothing.
 export const onNewPrompt = (task: TaskState, plan: Plan, text: string): TaskState => {
   if (text.trim() === '' || text.startsWith('<task-notification>')) return task
