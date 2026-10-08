@@ -116,7 +116,7 @@ A parent takes its status from its children. Any child in progress makes the par
 | `remove` | `id` | Drops a node and its subtree. Ids are never reused. |
 | `show` | none | Returns the current tree with ids. |
 
-A node may set `parallel: true` (on `set` or `add`). Its children may then be in progress at the same time; anywhere else a second in-progress leaf is rejected with an error naming the shared parent. Every answer is the plain-text tree. A failure is a result that starts with `Error:`. The current plan is attached to each new prompt, so ids stay in sync after a compaction. `/clear` resets the plan.
+A node may set `parallel: true` (on `set` or `add`). Its children may then be in progress at the same time; anywhere else a second in-progress leaf is rejected with an error naming the shared parent. Every answer is the plain-text tree. A failure is a result that starts with `Error:`. The current plan is sent to Claude at the start of each turn, so ids stay in sync after a compaction. `/clear` resets the plan.
 
 ### TaskCreate, TaskUpdate and TodoWrite mirroring
 
@@ -155,32 +155,32 @@ A color saved with `/todo color` takes precedence over `accentColor`. The `claud
 
 ## How it works: hooks
 
-The plugin registers 20 hooks in `.claude/skills/todo-list/hooks/register.tsx`. Only one of them decides anything (the catch-all `tool.call` hook). Hooks pass the host's event or result through unchanged except where the last column says otherwise. A hook that throws is caught and logged to the debug log, and the call proceeds as if the plugin were not there.
+The plugin registers 20 hooks in `.claude/skills/todo-list/hooks/register.tsx`. Two of them decide anything: the catch-all `tool.call` hook (the gate) and the `tool.call` hook for the plan tool (it answers calls to that one tool). Hooks pass the host's event or result through unchanged except where the last column says otherwise. A hook that throws is caught and logged to the debug log, and the call proceeds as if the plugin were not there.
 
 | Hook | What it does | What it decides, and when | What it changes |
 |---|---|---|---|
 | `session.start` | Loads the saved accent color, registers the plan tool and the `/todo` command, and on an interactive terminal arms the first-prompt pane open and opens the pane. | Nothing. | Registers the plan tool and `/todo`; opens the pane; invalidates the cached `tool.describe` answer. |
 | `command.run` (`todo`) | Runs `/todo` and its subcommands. | Which subcommand to run, from the typed arguments. | Opens or resizes the pane, clears the plan, flips the session enforcement switch, writes or deletes the saved accent color. |
 | `tool.describe` | For the plan tool only, marks it as not deferred so the model sees it on the first turn. | Nothing; other tools pass through. | Sets `isDeferred: false` on the plan tool's description. |
-| `tool.check` | Observes the permission verdict. When it is `ask`, records "waiting for permission". | Nothing. Observe-only. | Returns the verdict unchanged. Updates activity and the status line. |
 | `classic.PermissionRequest` | Records "waiting for permission" for the tool. | Nothing. Observe-only. | Passes the event on unchanged. Updates activity. |
 | `classic.SubagentStart` | Records that a subagent started. | Nothing. Observe-only. | Passes the event on unchanged. Updates the subagent count. |
 | `classic.SubagentStop` | Records that a subagent stopped. | Nothing. Observe-only. | Passes the event on unchanged. Updates the subagent count. |
 | `classic.StopFailure` | Records that the turn ended in an error. | Nothing. Observe-only. | Passes the event on unchanged. Updates activity. |
 | `classic.Notification` | Writes the notification type to the debug log. | Nothing. Observe-only. | Passes the event on unchanged. |
-| `session.compact` | Marks "Compacting" for the main session while a compaction runs. | Nothing. Observe-only. | Passes the event on unchanged. Updates activity. |
+| `classic.PreCompact` | Marks "Compacting" for the main session when a compaction starts. A subagent's compaction is ignored. | Nothing. Observe-only. | Passes the event on unchanged. Updates activity. |
+| `classic.PostCompact` | Clears "Compacting" when the compaction ends. A subagent's compaction is ignored. | Nothing. Observe-only. | Passes the event on unchanged. Updates activity. |
 | `turn.complete` | Records how the turn ended (answer, interrupted, error). | Nothing. Observe-only. | Passes the event on unchanged. Updates activity. |
 | `session.end` | On `/clear`, resets the activity state. | Nothing. Observe-only. | Passes the event on unchanged. |
-| `tool.call` (catch-all) | Answers calls to the plan tool itself. For other main-loop calls, runs the gate, then wraps the call in activity start and end. Subagent calls pass through. | Denies a state-changing main-loop tool (see Enforcement for the list) when the task has no plan and enforcement is on. Allows everything else. Fails open: guard failure, plan tool not registered or not offered, enforcement off, or 3 denies in the turn. | A denied call returns a deny message instead of running. Plan tool calls return the plan text and update the plan. For all other calls the result is returned untouched. |
-| `tool.call` (`TaskCreate`) | After a successful main-loop call, mirrors it into the plan. | Nothing. | Adds a node to the plan. The call's result is returned unchanged. |
-| `tool.call` (`TaskUpdate`) | After a successful main-loop call, mirrors the update into the plan. | Nothing. | Updates a node in the plan. The call's result is returned unchanged. |
-| `tool.call` (`TodoWrite`) | After a successful main-loop call, mirrors the todo list into the plan. | Nothing. | Updates the plan from the todo list. The call's result is returned unchanged. |
+| `tool.call` (catch-all) | For a main-loop call other than the plan tool, runs the gate, then records "Running <tool>" (or "Waiting for your answer" for `AskUserQuestion`). Subagent calls and plan tool calls pass through. | Denies a state-changing main-loop tool (see Enforcement for the list) when the task has no plan and enforcement is on. Allows everything else. Fails open: guard failure, plan tool not registered or not offered, enforcement off, or 3 denies in the turn. | A denied call returns a fixed deny message instead of running. For all other calls the event goes on unchanged. Updates activity. |
+| `tool.call` (`mcp__todo-list__plan`) | Answers every call to the plan tool: applies the op to the plan and returns the plan text, or an `Error:` text for a bad op. | Why the mod needs this hook: the API serves a plugin's own registered tool only from a `tool.call` hook, and no other hook or the core serves it. What it decides: nothing is refused; it always answers calls to this one tool. When: on every call to `mcp__todo-list__plan`. A subagent's call gets an error text and changes nothing. | Returns the plan text as the tool result and updates the plan and the status line. Never calls `next`. |
+| `classic.PostToolUse` | After a call finishes, ends its "Running" state. After a main-loop `TaskCreate`, `TaskUpdate` or `TodoWrite`, mirrors the call into the plan. | Nothing. A response in a shape the plugin does not know is logged and skipped. | Passes the event on unchanged. Adds, updates or removes plan nodes; updates activity. |
+| `classic.PostToolUseFailure` | After a failed call, ends its "Running" state. | Nothing. Observe-only. | Passes the event on unchanged. Updates activity. |
 | `prompt.compose` | Checks whether the plan tool is in the request's tool list and records it. | Whether to add the instruction: only when the plan tool is offered. | Adds one system prompt section (`todo-list:plan`) that asks Claude to plan first. Adds nothing when the tool is not offered. |
-| `prompt.submit` | On the first prompt of a session, opens the pane if it is not placed. Attaches the current plan to the prompt. | Whether to attach the plan: only when the plan has nodes. | Appends the current plan as one extra context entry to the prompt. May open the pane. |
-| `turn.start` | Reloads the saved accent color after a `/clear`, resets the per-turn deny count, records "Working". | Nothing. | Updates task state and activity. Passes the event on unchanged. |
+| `prompt.submit` | On the first prompt of a session, opens the pane if it is not placed. | Nothing. | Passes the event on unchanged. May open the pane. |
+| `turn.start` | Reloads the saved accent color after a `/clear`, resets the per-turn deny count, records "Working", and sends the current plan to the model. | Whether to send the plan: only when the plan has nodes. | Appends the current plan as one user-role row the model reads (the person does not see it as typed). Updates task state and activity. Passes the event on unchanged. |
 | `ui.render` (`Pane`, `todo`) | Draws the plan tree. If the terminal size, placement or plan height changed, re-opens the pane so the host resizes it. | Nothing. | Returns the pane contents. May close and reopen the pane. |
 
-Observe-only hooks: `tool.check`, `classic.PermissionRequest`, `classic.SubagentStart`, `classic.SubagentStop`, `classic.StopFailure`, `classic.Notification`, `session.compact`, `turn.complete`, `session.end`. They update the plugin's own activity state and pass the host's event or verdict through unchanged. The `TaskCreate`, `TaskUpdate` and `TodoWrite` hooks never change the tool's result; they only copy it into the plan.
+Observe-only hooks: `classic.PermissionRequest`, `classic.SubagentStart`, `classic.SubagentStop`, `classic.StopFailure`, `classic.Notification`, `classic.PreCompact`, `classic.PostCompact`, `classic.PostToolUse`, `classic.PostToolUseFailure`, `turn.complete`, `session.end`. They update the plugin's own activity state and pass the host's event through unchanged. `classic.PostToolUse` also copies a finished `TaskCreate`, `TaskUpdate` or `TodoWrite` into the plan; it never changes the tool's result.
 
 ## Data and privacy
 
@@ -190,7 +190,7 @@ Observe-only hooks: `tool.check`, `classic.PermissionRequest`, `classic.Subagent
 - The plugin reads no credentials, tokens or environment variables, and does not read or write files or run processes.
 - The plan tool is registered locally through `$.tool.register` and appears as an MCP tool named `mcp__todo-list__plan`. It is answered by the plugin's own hook, not by a separate server.
 
-The plugin sends the current plan to the model as part of each prompt, and the plan tool's name and the planning instruction as part of the system prompt. That is how Claude sees the plan.
+The plugin sends the current plan to the model at the start of each turn as a user-role row, and the plan tool's name and the planning instruction as part of the system prompt. That is how Claude sees the plan.
 
 ## Requirements
 
