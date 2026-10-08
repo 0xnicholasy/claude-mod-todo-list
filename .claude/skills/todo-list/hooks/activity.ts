@@ -15,8 +15,11 @@ export type ActivityEvent =
   | { type: 'turnStart' }
   // An `agentId` marks a subagent's turn end; only main-loop turn ends move the phase.
   | { type: 'turnComplete'; reason: TurnReason; agentId?: string }
-  | { type: 'toolStart'; tool: string }
-  | { type: 'toolEnd' }
+  // `id` is the call's id when the hook carries one; without it the entry is synthetic (`name:<tool>`).
+  | { type: 'toolStart'; tool: string; id?: string }
+  // By id first; an absent or unknown id falls back to the oldest synthetic entry of `tool`. With neither
+  // id nor tool every running call is cleared.
+  | { type: 'toolEnd'; id?: string; tool?: string }
   | { type: 'permissionAsk'; tool: string }
   | { type: 'permissionEnd' }
   | { type: 'questionOpen' }
@@ -28,7 +31,7 @@ export type ActivityEvent =
   | { type: 'stopFailure'; detail: string }
   | { type: 'sessionClear' }
 
-export const emptyActivity = (now: number): ActivityState => ({ phase: 'idle', subagents: [], since: now })
+export const emptyActivity = (now: number): ActivityState => ({ phase: 'idle', subagents: [], running: [], since: now })
 
 // Higher rank wins. idle, interrupted and error are turn-end states, ranked below working.
 const RANK: Record<ActivityPhase, number> = {
@@ -47,6 +50,7 @@ const enter = (prev: ActivityState, phase: ActivityPhase, now: number, tool?: st
   const next: ActivityState = {
     phase,
     subagents: prev.subagents,
+    running: prev.running,
     since: prev.phase === phase ? prev.since : now,
   }
   if (tool !== undefined) next.tool = tool
@@ -59,26 +63,63 @@ const enter = (prev: ActivityState, phase: ActivityPhase, now: number, tool?: st
 const raise = (prev: ActivityState, phase: ActivityPhase, now: number, tool?: string): ActivityState =>
   RANK[prev.phase] > RANK[phase] ? prev : enter(prev, phase, now, tool)
 
-// Ends `ended` and falls back to working; any other phase is left alone.
+// Settles into the turn's resting phase: `tool` labelled by the newest running call, else `working`.
+const settle = (prev: ActivityState, now: number): ActivityState => {
+  const last = prev.running[prev.running.length - 1]
+
+  return last ? enter(prev, 'tool', now, last.tool) : enter(prev, 'working', now)
+}
+
+// Ends `ended` and settles; any other phase is left alone.
 const fallBack = (prev: ActivityState, ended: ActivityPhase, now: number): ActivityState =>
-  prev.phase === ended ? enter(prev, 'working', now) : prev
+  prev.phase === ended ? settle(prev, now) : prev
+
+// Moves to `phase` with no running calls (a turn boundary: a stuck entry lasts at most one turn).
+const enterIdle = (prev: ActivityState, phase: ActivityPhase, now: number, detail?: string): ActivityState => ({
+  ...enter(prev, phase, now, undefined, detail),
+  running: [],
+})
+
+// The entry a toolEnd removes: by id, else the oldest synthetic entry of `tool`; -1 when none matches.
+const endedIndex = (running: ActivityState['running'], id: string | undefined, tool: string | undefined): number => {
+  const byId = id ? running.findIndex(r => r.id === id) : -1
+  if (byId >= 0 || !tool) return byId
+
+  return running.findIndex(r => r.tool === tool && r.id === `name:${r.tool}`)
+}
 
 export const reduceActivity = (prev: ActivityState, event: ActivityEvent, now: number): ActivityState => {
   switch (event.type) {
     case 'turnStart':
-      return enter(prev, 'working', now)
+      return enterIdle(prev, 'working', now)
     case 'turnComplete': {
       if (event.agentId !== undefined) return prev
-      if (event.reason === 'aborted') return enter(prev, 'interrupted', now)
-      if (event.reason === 'error' || event.reason === 'refusal') return enter(prev, 'error', now)
+      if (event.reason === 'aborted') return enterIdle(prev, 'interrupted', now)
+      if (event.reason === 'error' || event.reason === 'refusal') return enterIdle(prev, 'error', now)
 
-      return enter(prev, 'idle', now)
+      return enterIdle(prev, 'idle', now)
     }
-    case 'toolStart':
-      return raise(prev, 'tool', now, clean(event.tool) || 'tool')
-    case 'toolEnd':
+    case 'toolStart': {
+      const tool = clean(event.tool) || 'tool'
+      const entry = { id: clean(event.id ?? '') || `name:${tool}`, tool }
+      const running = [...prev.running, entry]
+      // A higher phase (permission, compacting, question) keeps showing; only `running` grows.
+      if (RANK[prev.phase] > RANK.tool) return { ...prev, running }
+
+      return raise({ ...prev, running }, 'tool', now, tool)
+    }
+    case 'toolEnd': {
+      const tool = event.tool === undefined ? undefined : clean(event.tool) || 'tool'
+      const id = event.id === undefined ? undefined : clean(event.id)
+      const all = id === undefined && tool === undefined
+      const at = all ? -1 : endedIndex(prev.running, id, tool)
+      // An unknown call changes nothing.
+      if (!all && at < 0) return prev
+      const running = all ? [] : prev.running.filter((_, i) => i !== at)
+      if (prev.phase !== 'tool' && prev.phase !== 'permission') return { ...prev, running }
       // A tool that ends while permission is shown means the dialog is over too.
-      return prev.phase === 'tool' || prev.phase === 'permission' ? enter(prev, 'working', now) : prev
+      return settle({ ...prev, running }, now)
+    }
     case 'permissionAsk':
       return raise(prev, 'permission', now, clean(event.tool) || 'tool')
     case 'permissionEnd':
@@ -98,7 +139,10 @@ export const reduceActivity = (prev: ActivityState, event: ActivityEvent, now: n
       return next
     }
     case 'compactEnd':
-      return prev.phase === 'compacting' ? enter(prev, prev.resume ?? 'working', now) : prev
+      if (prev.phase !== 'compacting') return prev
+      const resume = prev.resume ?? 'working'
+
+      return resume === 'working' ? settle(prev, now) : enter(prev, resume, now)
     case 'subagentStart': {
       const id = clean(event.id)
       if (!id || prev.subagents.includes(id)) return prev

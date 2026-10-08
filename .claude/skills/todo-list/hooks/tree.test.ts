@@ -18,7 +18,7 @@ const node = (id: string, status: PlanStatus, extra: Partial<PlanNode> = {}): Pl
 }
 
 const planOf = (...nodes: PlanNode[]): Plan => ({ title: 'Add CSV', nodes, issued: [] })
-const idle: ActivityState = { phase: 'idle', subagents: [], since: 0 }
+const idle: ActivityState = { phase: 'idle', subagents: [], running: [], since: 0 }
 const texts = (lines: { text: string }[]): string[] => lines.map(l => l.text)
 
 // 2 levels: a completed branch, an active branch with a blocked and last child, a pending leaf.
@@ -48,7 +48,7 @@ const segOf = (line: TreeLine, needle: string): Seg => {
 
   return hit
 }
-const toolActivity: ActivityState = { phase: 'tool', tool: 'Bash', subagents: ['a'], since: 0 }
+const toolActivity: ActivityState = { phase: 'tool', tool: 'Bash', subagents: ['a'], running: [], since: 0 }
 
 test('buildTree draws exact lines for a 2-level fixture at width 56', () => {
   const lines = buildTree(twoLevel, toolActivity, { maxLines: 20, width: 56 })
@@ -319,7 +319,7 @@ const manyAtWidth = planOf(
   node('1.1', 'in_progress', { title: 'A very long step title that cannot fit' }),
   node('1.2', 'blocked', { note: 'waiting on a long answer from the owner' }),
 )
-const busy: ActivityState = { phase: 'tool', tool: 'WebSearch', subagents: ['a', 'b'], since: 0 }
+const busy: ActivityState = { phase: 'tool', tool: 'WebSearch', subagents: ['a', 'b'], running: [], since: 0 }
 
 test('buildTree draws exact lines for the 2-level fixture at width 40', () => {
   const lines = buildTree(twoLevel, toolActivity, { maxLines: 20, width: 40 })

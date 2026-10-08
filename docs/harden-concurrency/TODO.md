@@ -2,7 +2,7 @@
 
 ultraplan: harden-concurrency | branch: feat/harden-concurrency | base: main | tag: pre-harden-concurrency-main | created: 2026-10-08
 Status: ACTIVE
-Progress: 2/9 done
+Progress: 3/9 done
 
 ## Goal
 The mod must behave correctly when Claude runs tool calls in parallel and when a write or a mirror fails. Specifically:
@@ -32,7 +32,7 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 - D1 Land once at the end. The owner merges the landing PR into main. (owner, 2026-10-08)
 - D2 No enabler PR: `.github/workflows/ci.yml` already runs on `feat/**` (lines 4, 6). | confirmed by T01 (CI ran on PR #26)
 - D3 No self-heal for dropped mirrors. A status-only update cannot rebuild a title, and late updates can bring deleted tasks back. (owner reviewer, 2026-10-08)
-- D4 `activity.running` entries are `Array<{ id: string; tool: string }>`, not `string[]`. Three needs drive this: the label must fall back to the previous still-running call's name when the newest ends, the name fallback must work, and a start without an id gets a synthetic id `name:<tool>`. | assumed, confirm by T03
+- D4 `activity.running` entries are `Array<{ id: string; tool: string }>`, not `string[]`. Three needs drive this: the label must fall back to the previous still-running call's name when the newest ends, the name fallback must work, and a start without an id gets a synthetic id `name:<tool>`. | confirmed by T03
 
 ## Todos
 
@@ -58,7 +58,7 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 - verify: `rtk proxy npm run check`; `npm ci && npm run typecheck`
 
 ### T03 Track running tool calls in the activity reducer (pure)
-- status: todo
+- status: done (#29, 2026-10-08)
 - needs: none
 - size: M
 - scope: Add `running: Array<{ id: string; tool: string }>` (D4) inline to the `activity` atom (types/index.d.ts:64-71) and to the named `ActivityState` (:34-41). `emptyActivity` (activity.ts:31) defaults it to `[]`. Event changes:
@@ -163,7 +163,12 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 - done when: skill removed from the branch, TODO.md archived, landing PR into main open and approved by the owner
 
 ## Backlog
+- T07: an AskUserQuestion entry in activity.running is only removed by its PostToolUse (toolEnd by id); until then questionClose settles into `tool` labelled AskUserQuestion. Confirm T07's id wiring ends it.
+- T07: in a parallel batch a toolEnd for call B while call A waits on permission settles out of `permission` (activity.ts toolEnd); fixing it needs the asking call's id, which PermissionRequest lacks. (T03 review, Medium)
+- activity.ts: `stopFailure` enters `error` without clearing `running`, unlike the other turn ends; `compactEnd` into idle/interrupted/error keeps a non-empty `running` until the next turnStart. (T03 review, Low)
+- activity.ts: `running` has no cap and no duplicate-id guard; a blank id with no tool is a no-op rather than clear-all, so T07 must not pass blank ids. (T03 review, Low)
 
 ## Log
 - 2026-10-08 T01 done: plan-tool failure path locked by a register.test.ts case; mutation check failed as expected (#26)
 - 2026-10-08 T02 done: mirror() reassigns its whole outcome on every CAS attempt; a forced-miss state.set seam covers error-then-success and success-then-error (#28)
+- 2026-10-08 T03 done: the activity reducer tracks running calls by id with a name fallback; the label is the newest running call and the phase drops to working only when none remain (#29)
