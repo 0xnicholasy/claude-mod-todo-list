@@ -103,7 +103,7 @@ A parent takes its status from its children. Any child in progress makes the par
 | Label | When |
 |---|---|
 | Working | A prompt was submitted and Claude is thinking. |
-| Running `<tool>` | A tool call from the main session is running. |
+| Running `<tool>` | A tool call from the main session is running. In a parallel batch it shows the most recently started call until the last one ends. |
 | Waiting for permission: `<tool>` | A tool call is waiting on a permission dialog. |
 | Waiting for your answer | Claude asked a question with AskUserQuestion. |
 | Compacting | The conversation is being compacted. |

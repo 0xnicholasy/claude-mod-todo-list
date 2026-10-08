@@ -2,7 +2,7 @@
 
 ultraplan: harden-concurrency | branch: feat/harden-concurrency | base: main | tag: pre-harden-concurrency-main | created: 2026-10-08
 Status: ACTIVE
-Progress: 6/9 done
+Progress: 7/9 done
 
 ## Goal
 The mod must behave correctly when Claude runs tool calls in parallel and when a write or a mirror fails. Specifically:
@@ -126,7 +126,7 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 - verify: `rtk proxy npm run check`; `npm ci && npm run typecheck`
 
 ### T07 Wire tool_use_id so a parallel batch keeps "Running"
-- status: todo
+- status: done (#33, 2026-10-08)
 - needs: T06
 - size: M
 - scope:
@@ -164,10 +164,12 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 - done when: skill removed from the branch, TODO.md archived, landing PR into main open and approved by the owner
 
 ## Backlog
-- T07: an AskUserQuestion entry in activity.running is only removed by its PostToolUse (toolEnd by id); until then questionClose settles into `tool` labelled AskUserQuestion. Confirm T07's id wiring ends it.
-- T07: in a parallel batch a toolEnd for call B while call A waits on permission settles out of `permission` (activity.ts toolEnd); fixing it needs the asking call's id, which PermissionRequest lacks. (T03 review, Medium)
+- T07: an AskUserQuestion entry in activity.running is only removed by its PostToolUse (toolEnd by id); until then questionClose settles into `tool` labelled AskUserQuestion. Confirm T07's id wiring ends it. (resolved by T07: AskUserQuestion only opens the question phase and never gets a running entry; a register.test.ts case locks the fall back to the other running call)
+- T07: in a parallel batch a toolEnd for call B while call A waits on permission settles out of `permission` (activity.ts toolEnd); fixing it needs the asking call's id, which PermissionRequest lacks. (T03 review, Medium) (still open after T07: PermissionRequest carries no tool_use_id, so the asking call cannot be named)
 - activity.ts: `stopFailure` enters `error` without clearing `running`, unlike the other turn ends; `compactEnd` into idle/interrupted/error keeps a non-empty `running` until the next turnStart. (T03 review, Low)
 - activity.ts: `running` has no cap and no duplicate-id guard; a blank id with no tool is a no-op rather than clear-all, so T07 must not pass blank ids. (T03 review, Low)
+- register.tsx: reportDrop's reason parameter is typed string; narrow it to the ingest.ts reason constants so a caller cannot pass user text. (T06 review, Low)
+- TODO: record as a decision that a TaskUpdate the tool reports as success:false logs and skips without a drop toast. (T06 review, Low)
 
 ## Log
 - 2026-10-08 T01 done: plan-tool failure path locked by a register.test.ts case; mutation check failed as expected (#26)
@@ -176,3 +178,4 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 - 2026-10-08 T04 done: gate.ts gains a pure transition(cur, input) returning next, decision and toast; deny/pause counting matches runGate and is walked 0 through 5 in gate.test.ts (#30)
 - 2026-10-08 T05 done: an unknown-id TaskUpdate returns { ignored: IGNORED_UNKNOWN_TASK }; mirror() debug-logs it and skips onPlanTouched and the status refresh, so the gate stays closed and no toast fires (#31)
 - 2026-10-08 T06 done: reportDrop() toasts once per session ('Plan not updated: <fixed reason>') when a mirror is dropped or a response is not recognised; the once-flag is a CAS dropShown atom, reset on /clear (#32)
+- 2026-10-08 T07 done: tool_use_id now keys toolStart and toolEnd, so a parallel batch keeps Running until its last call ends; live check showed `Running Bash · 1 subagent`, then `Running Bash` after the Agent call and subagent ended, then `Working` once Bash ended (#33)
