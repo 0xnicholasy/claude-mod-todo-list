@@ -2,7 +2,7 @@
 
 ultraplan: harden-concurrency | branch: feat/harden-concurrency | base: main | tag: pre-harden-concurrency-main | created: 2026-10-08
 Status: ACTIVE
-Progress: 0/9 done
+Progress: 1/9 done
 
 ## Goal
 The mod must behave correctly when Claude runs tool calls in parallel and when a write or a mirror fails. Specifically:
@@ -37,7 +37,7 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 ## Todos
 
 ### T01 Lock the plan-tool failure path with a test
-- status: todo
+- status: done (#PR, 2026-10-08)
 - needs: none
 - size: S
 - scope: Extend the gateSetup corruption seam (register.test.ts:614-625) to cover the `plan` atom as a one-shot. The first `state.get` for key `plan` returns a malformed value and then the flag clears itself. Add `plan` to the `corrupt` shape as an optional field so the two existing callers (`{ task: false, toast: false }` at :680, :719) keep compiling. Add one case that does these steps in order: (1) turn.start; (2) a plan `set` call; (3) assert the result equals `'Error: the plan tool failed. Try again.'` (register.tsx:494); (4) a following `{ op: 'show' }` reports "No plan yet"; (5) Edit is still denied. Mitigations: the seam must be one-shot. Do a mutation check: move `await update($, task, onPlanTouched)` above the plan `update` in `answerPlanCall` (register.tsx:243-249), show that the new test fails, then restore. Test-only change.
@@ -165,3 +165,4 @@ The mod must behave correctly when Claude runs tool calls in parallel and when a
 ## Backlog
 
 ## Log
+- 2026-10-08 T01 done: plan-tool failure path locked by a register.test.ts case; mutation check failed as expected (#PR)
