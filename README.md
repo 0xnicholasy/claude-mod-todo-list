@@ -231,7 +231,6 @@ npm run check
 - Third-party MCP tools are not gated, because the API gives no read-only flag before a call runs.
 - All of Bash is gated, including read-only commands such as `ls`.
 - Notification types other than `permission_prompt` are not mapped to an activity.
-- With parallel tool calls, the status drops back to Working as soon as the first call finishes.
 - A subagent's permission prompt shows as the main session waiting for permission.
 - Dialogs cover the pane.
 
