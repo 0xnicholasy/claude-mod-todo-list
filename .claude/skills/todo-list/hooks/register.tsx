@@ -109,6 +109,18 @@ async function applyActivity($: EngineInterface, event: ActivityEvent): Promise<
   await refreshStatus($)
 }
 
+// Ends the permission label only when it belongs to `tool`. The check runs inside the update so a
+// concurrent permissionAsk for another call cannot slip between a read and the write. A call denied by
+// a rule (no dialog) must not clear the live dialog of a different call.
+async function endPermissionFor($: EngineInterface, tool: string): Promise<void> {
+  const now = await $.clock.now()
+  const name = clean(tool) || 'tool'
+  await update($, activity, cur =>
+    cur.phase === 'permission' && cur.tool !== name ? cur : reduceActivity(cur, { type: 'permissionEnd' }, now),
+  )
+  await refreshStatus($)
+}
+
 // A debug line must never stop what follows it (a toast, a gate decision), so a throwing log is swallowed.
 function debugLog($: EngineInterface, text: string): void {
   try {
@@ -473,7 +485,7 @@ export const register: Register = (on, options) => {
   on('classic.PermissionDenied', async ($, e, next) => {
     await guard($, 'PermissionDenied', undefined, async () => {
       await endTool($, e.tool_name, e.tool_use_id, e.agent_id)
-      if (e.agent_id === undefined) await applyActivity($, { type: 'permissionEnd' })
+      if (e.agent_id === undefined) await endPermissionFor($, e.tool_name)
     })
 
     return next(e)

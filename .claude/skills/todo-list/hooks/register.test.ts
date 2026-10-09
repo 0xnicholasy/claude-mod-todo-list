@@ -534,6 +534,22 @@ test('PermissionDenied for one of two parallel calls keeps the other Running', a
   expect(statuses.at(-1)).toBe('Running Bash')
 })
 
+test('PermissionDenied for a different call keeps the open permission label', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  on('classic.PermissionRequest', async () => ({}))
+  on('classic.PermissionDenied', async () => ({}))
+  stubBash(on)
+  on('tool.call', { tool: 'Read' }, async () => ({ result: 'ok' }))
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.tool.call(BASH)
+  await $.tool.call({ tool: 'Read', file_path: '/x' })
+  const readId = lastId()
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
+  expect(statuses.at(-1)).toBe('Waiting for permission: Bash')
+  await $.classic.PermissionDenied({ tool_name: 'Read', tool_input: {}, tool_use_id: readId, reason: 'rule' })
+  expect(statuses.at(-1)).toBe('Waiting for permission: Bash')
+})
+
 test('AskUserQuestion shows Waiting for your answer until PostToolUse', async ($, on) => {
   const { statuses } = activitySetup(on)
   on('classic.PostToolUse', async () => ({}))
