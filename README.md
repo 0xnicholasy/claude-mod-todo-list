@@ -103,7 +103,7 @@ A parent takes its status from its children. Any child in progress makes the par
 | Label | When |
 |---|---|
 | Working | A prompt was submitted and Claude is thinking. |
-| Running `<tool>` | A tool call from the main session is running. |
+| Running `<tool>` | A tool call from the main session is running. In a parallel batch it shows the most recently started call until the last one ends. |
 | Waiting for permission: `<tool>` | A tool call is waiting on a permission dialog. |
 | Waiting for your answer | Claude asked a question with AskUserQuestion. |
 | Compacting | The conversation is being compacted. |
@@ -129,6 +129,8 @@ A node may set `parallel: true` (on `set` or `add`). Its children may then be in
 ### TaskCreate, TaskUpdate and TodoWrite mirroring
 
 When the session offers `TaskCreate`, `TaskUpdate` or `TodoWrite`, successful main-session calls are mirrored into the tree as top-level nodes and count as having a plan. The plan tool stays the preferred path. In Claude Code 2.1.289, `TodoWrite` does not exist and `TaskCreate` and `TaskUpdate` are not offered by default, so the plan tool is the only default path.
+
+A mirrored call the plugin cannot apply is dropped: the plan stays as it was, the detail goes to the debug log, and one toast per session says "Plan not updated" with a fixed reason (a limit was hit, or the tool response was not recognised). The toast never repeats the task text. A call that fails on one attempt and fits on a retry shows no toast, and a `/clear` re-arms the toast.
 
 ### Enforcement
 
@@ -163,10 +165,10 @@ A color saved with `/todo color` takes precedence over `accentColor`. The `claud
 
 ## How it works: hooks
 
-The plugin registers 20 hooks in `.claude/skills/todo-list/hooks/register.tsx`. Two of them decide anything: the catch-all `tool.call` hook (the gate) and the `tool.call` hook for the plan tool (it answers calls to that one tool). Hooks pass the host's event or result through unchanged except where the last column says otherwise. A hook that throws is caught and logged to the debug log, and the call proceeds as if the plugin were not there.
+The plugin registers 21 hooks in `.claude/skills/todo-list/hooks/register.tsx`. Two of them decide anything: the catch-all `tool.call` hook (the gate) and the `tool.call` hook for the plan tool (it answers calls to that one tool). Hooks pass the host's event or result through unchanged except where the last column says otherwise. A hook that throws is caught and logged to the debug log, and the call proceeds as if the plugin were not there.
 
 <details>
-<summary>All 20 hooks</summary>
+<summary>All 21 hooks</summary>
 
 | Hook | What it does | What it decides, and when | What it changes |
 |---|---|---|---|
@@ -174,6 +176,7 @@ The plugin registers 20 hooks in `.claude/skills/todo-list/hooks/register.tsx`. 
 | `command.run` (`todo`) | Runs `/todo` and its subcommands. | Which subcommand to run, from the typed arguments. | Opens or resizes the pane, clears the plan, flips the session enforcement switch, writes or deletes the saved accent color. |
 | `tool.describe` | For the plan tool only, marks it as not deferred so the model sees it on the first turn. | Nothing; other tools pass through. | Sets `isDeferred: false` on the plan tool's description. |
 | `classic.PermissionRequest` | Records "waiting for permission" for the tool. | Nothing. Observe-only. | Passes the event on unchanged. Updates activity. |
+| `classic.PermissionDenied` | Ends the denied call's activity and clears the permission label. | Nothing. Observe-only. | Passes the event on unchanged. Updates activity. |
 | `classic.SubagentStart` | Records that a subagent started. | Nothing. Observe-only. | Passes the event on unchanged. Updates the subagent count. |
 | `classic.SubagentStop` | Records that a subagent stopped. | Nothing. Observe-only. | Passes the event on unchanged. Updates the subagent count. |
 | `classic.StopFailure` | Records that the turn ended in an error. | Nothing. Observe-only. | Passes the event on unchanged. Updates activity. |
@@ -191,7 +194,7 @@ The plugin registers 20 hooks in `.claude/skills/todo-list/hooks/register.tsx`. 
 | `turn.start` | Reloads the saved accent color after a `/clear`, resets the per-turn deny count, records "Working", and sends the current plan to the model. | Whether to send the plan: only when the plan has nodes. | Appends the current plan as one user-role row the model reads (the person does not see it as typed). Updates task state and activity. Passes the event on unchanged. |
 | `ui.render` (`Pane`, `todo`) | Draws the plan tree. If the terminal size, placement or plan height changed, re-opens the pane so the host resizes it. | Nothing. | Returns the pane contents. May close and reopen the pane. |
 
-Observe-only hooks: `classic.PermissionRequest`, `classic.SubagentStart`, `classic.SubagentStop`, `classic.StopFailure`, `classic.Notification`, `classic.PreCompact`, `classic.PostCompact`, `classic.PostToolUse`, `classic.PostToolUseFailure`, `turn.complete`, `session.end`. They update the plugin's own activity state and pass the host's event through unchanged. `classic.PostToolUse` also copies a finished `TaskCreate`, `TaskUpdate` or `TodoWrite` into the plan; it never changes the tool's result.
+Observe-only hooks: `classic.PermissionRequest`, `classic.PermissionDenied`, `classic.SubagentStart`, `classic.SubagentStop`, `classic.StopFailure`, `classic.Notification`, `classic.PreCompact`, `classic.PostCompact`, `classic.PostToolUse`, `classic.PostToolUseFailure`, `turn.complete`, `session.end`. They update the plugin's own activity state and pass the host's event through unchanged. `classic.PostToolUse` also copies a finished `TaskCreate`, `TaskUpdate` or `TodoWrite` into the plan; it never changes the tool's result.
 
 </details>
 
@@ -228,7 +231,6 @@ npm run check
 - Third-party MCP tools are not gated, because the API gives no read-only flag before a call runs.
 - All of Bash is gated, including read-only commands such as `ls`.
 - Notification types other than `permission_prompt` are not mapped to an activity.
-- With parallel tool calls, the status drops back to Working as soon as the first call finishes.
 - A subagent's permission prompt shows as the main session waiting for permission.
 - Dialogs cover the pane.
 

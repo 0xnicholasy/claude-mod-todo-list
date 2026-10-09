@@ -5,11 +5,11 @@ import { emptyActivity, reduceActivity } from './activity'
 import type { ActivityEvent } from './activity'
 import { needsRefit } from './fit'
 import type { PaneFit } from './fit'
-import type { GateDecision } from './gate'
-import { decideGate, INSTRUCTION_ID, INSTRUCTION_TEXT, MAX_DENIES, onNewPrompt, onPlanTouched, planContext } from './gate'
-import { ingestTaskCreate, ingestTaskUpdate, ingestTodoWrite } from './ingest'
+import type { GateDecision, GateTransition } from './gate'
+import { INSTRUCTION_ID, INSTRUCTION_TEXT, onNewPrompt, onPlanTouched, planContext, transition } from './gate'
+import { DROPPED_NOT_MIRRORED, DROPPED_UNRECOGNISED, ingestTaskCreate, ingestTaskUpdate, ingestTodoWrite } from './ingest'
+import type { IngestResult } from './ingest'
 import { emptyPlan } from './plan'
-import type { PlanResult } from './plan'
 import type { PlanApplied } from './plan-tool'
 import {
   applyPlanOp,
@@ -20,7 +20,7 @@ import {
   PLAN_TOOL_SHORT_NAME,
   touchesPlan,
 } from './plan-tool'
-import { taskCreateFrom, taskUpdateFrom, todosFrom } from './post-tool'
+import { taskCreateFrom, taskUpdateFailed, taskUpdateFrom, todosFrom } from './post-tool'
 import { clean } from './sanitize'
 import { ACCENT_STORE_KEY, resolveAccent, validAccent } from './accent'
 import { buildTree, DEFAULT_WIDTH, paneRows, statusLine } from './tree'
@@ -51,6 +51,10 @@ const enforceSession = atom({ plugin: 'todo-list', key: 'enforceSession' } as co
 // The accent set by `/todo color`, loaded from the plugin store at session start so it applies to
 // every session; null defers to the plugin option `accentColor`.
 const accentOverride = atom({ plugin: 'todo-list', key: 'accentOverride' } as const, null as string | null)
+// Whether the dropped-mirror toast has shown this session. Claimed with a compare-and-set update so
+// only one of several concurrent drops toasts. The host resets atoms on /clear (T01 Q7), and the
+// session.end clear path resets it too.
+const dropShown = atom({ plugin: 'todo-list', key: 'dropShown' } as const, false as boolean)
 const planTool = atom({ plugin: 'todo-list', key: 'planTool' } as const, {
   name: null,
   offered: false,
@@ -105,8 +109,13 @@ async function applyActivity($: EngineInterface, event: ActivityEvent): Promise<
   await refreshStatus($)
 }
 
+// A debug line must never stop what follows it (a toast, a gate decision), so a throwing log is swallowed.
 function debugLog($: EngineInterface, text: string): void {
-  $.ui.log(text.slice(0, LOG_LIMIT), { to: 'debug' })
+  try {
+    $.ui.log(text.slice(0, LOG_LIMIT), { to: 'debug' })
+  } catch {
+    // Logging must never throw out of a hook.
+  }
 }
 
 // Inline the pane is as tall as the tree wants (a short plan wastes no rows); docked it is
@@ -189,16 +198,16 @@ async function runTodoCommand(
   return { text: 'Plan cleared.' }
 }
 
-// A toast failure must never change the deny/allow outcome of the gate.
-function safeToast($: EngineInterface, text: string): void {
+// A toast failure must never change the deny/allow outcome of the gate. Answers whether it was shown.
+function safeToast($: EngineInterface, text: string): boolean {
   try {
     $.ui.toast(text)
+
+    return true
   } catch (error) {
-    try {
-      $.ui.log(`todo-list: toast threw ${String(error)}`, { to: 'debug' })
-    } catch {
-      // Logging must never throw out of a hook.
-    }
+    debugLog($, `todo-list: toast threw ${String(error)}`)
+
+    return false
   }
 }
 
@@ -207,8 +216,8 @@ function safeToast($: EngineInterface, text: string): void {
 // (turn.start resets it); after MAX_DENIES the gate pauses, and the pause toast shows once
 // because the pausing call moves `denies` past MAX_DENIES.
 async function runGate($: EngineInterface, tool: string, enforceConfig: boolean): Promise<GateDecision> {
-  const [stored, session, t] = await Promise.all([read($, planTool), read($, enforceSession), read($, task)])
-  const decision = decideGate({
+  const [stored, session, snapshot] = await Promise.all([read($, planTool), read($, enforceSession), read($, task)])
+  const input = {
     tool,
     isPlanTool: false,
     planToolName: stored.name ?? PLAN_TOOL_FULL_NAME,
@@ -216,18 +225,50 @@ async function runGate($: EngineInterface, tool: string, enforceConfig: boolean)
     enforceSession: session,
     toolRegistered: stored.name !== null,
     toolOffered: stored.offered,
-    planned: t.planned,
-    denies: t.denies,
-  })
-  if (decision.kind === 'deny') {
-    await update($, task, cur => ({ ...cur, denies: cur.denies + 1 }))
-    if (t.denies === 0) safeToast($, `Blocked ${tool}: no plan yet. /todo off turns this off.`)
-  } else if (decision.kind === 'pause' && t.denies === MAX_DENIES) {
-    await update($, task, cur => ({ ...cur, denies: cur.denies + 1 }))
-    safeToast($, decision.toast)
   }
+  // Fast path: within a turn `planned` only goes false to true, so a snapshot that allows with no
+  // denies counted is final and needs no write. Any other snapshot goes through the transition.
+  const early = transition({ ...snapshot, denies: 0 }, input)
+  if (early.decision.kind === 'allow') return early.decision
+  // The decision and the deny count come from one transition on the value the write is checked
+  // against. `update` reruns the reducer when its write misses ifVersion, so `out` is reassigned on
+  // every attempt and only the attempt that landed is acted on. Toasts fire after update resolves.
+  let out: GateTransition | undefined
+  await update($, task, cur => {
+    out = transition(cur, input)
 
-  return decision
+    return out.next
+  })
+  if (out === undefined) {
+    debugLog($, `todo-list: gate reducer did not run, allowing ${tool}`)
+
+    return { kind: 'allow' }
+  }
+  if (out.toast === 'deny') safeToast($, `Blocked ${tool}: no plan yet. /todo off turns this off.`)
+  else if (out.toast === 'pause' && out.decision.kind === 'pause') safeToast($, out.decision.toast)
+
+  return out.decision
+}
+
+// Tells the person once per session that a task call was not mirrored. The reason is one of the
+// fixed DROPPED_* strings. Must run after the mirror's own update() has resolved, never inside a
+// reducer. `update` reruns the reducer when its write misses ifVersion, so `won` is reassigned on
+// every attempt and only the attempt that flipped false to true toasts. A claim whose toast failed is released.
+async function reportDrop($: EngineInterface, reason: string): Promise<void> {
+  let won = false
+  await update($, dropShown, cur => {
+    won = !cur
+
+    return true
+  })
+  // A toast that did not show gives the claim back, so the next drop can still tell the person.
+  if (won && !safeToast($, `Plan not updated: ${reason}`)) await update($, dropShown, () => false)
+}
+
+// A tool response the narrowing does not know: logged with detail, and reported once.
+async function dropUnrecognised($: EngineInterface, name: string): Promise<void> {
+  debugLog($, `todo-list: ${name} response not recognised, not mirrored`)
+  await reportDrop($, DROPPED_UNRECOGNISED)
 }
 
 // Answers a call to the plan tool with the text the model reads. The plan tool's tool.call hook
@@ -253,22 +294,38 @@ async function answerPlanCall($: EngineInterface, input: unknown, agentId: strin
 }
 
 // Mirrors a successful TaskCreate/TaskUpdate/TodoWrite call into the plan (D10). The call has
-// already run; a rejected mapping (a limit, say) leaves the plan alone and is only logged.
-async function mirror($: EngineInterface, name: string, apply: (cur: Plan, now: number) => PlanResult): Promise<void> {
+// already run; a rejected mapping (a limit, say) leaves the plan alone and is only logged. An
+// ignored call (a TaskUpdate for an id the plan does not hold) is also only logged: it changes
+// nothing, so it neither counts as having a plan nor redraws the status line.
+async function mirror($: EngineInterface, name: string, apply: (cur: Plan, now: number) => IngestResult): Promise<void> {
   const now = await $.clock.now()
-  let failure: string | null = null
+  // `update` runs the reducer again when its write misses ifVersion, so every attempt assigns the
+  // whole outcome: a result from an earlier attempt must not outlive a retry that differs.
+  let outcome = { kind: 'failed', text: 'plan unchanged' } as { kind: 'ok' | 'failed' | 'ignored'; text: string }
   await update($, plan, (cur: Plan) => {
     const out = apply(cur, now)
     if ('error' in out) {
-      failure = out.error
+      outcome = { kind: 'failed', text: out.error }
 
       return cur
     }
+    if ('ignored' in out) {
+      outcome = { kind: 'ignored', text: out.ignored }
+
+      return cur
+    }
+    outcome = { kind: 'ok', text: '' }
 
     return out.plan
   })
-  if (failure !== null) {
-    $.ui.log(`todo-list: ${name} not mirrored: ${failure}`, { to: 'debug' })
+  if (outcome.kind === 'failed') {
+    debugLog($, `todo-list: ${name} not mirrored: ${outcome.text}`)
+    await reportDrop($, DROPPED_NOT_MIRRORED)
+
+    return
+  }
+  if (outcome.kind === 'ignored') {
+    debugLog($, `todo-list: ${name} ignored: ${outcome.text}`)
 
     return
   }
@@ -276,10 +333,19 @@ async function mirror($: EngineInterface, name: string, apply: (cur: Plan, now: 
   await refreshStatus($)
 }
 
-// Ends the activity a finished call started. A subagent's call never started one; it only clears a
-// permission label (its own ask may be the one shown) and leaves a main-loop tool phase alone. The
-// plan tool never showed as Running.
-async function endTool($: EngineInterface, tool: string, agentId: string | undefined): Promise<void> {
+// The call id as the activity reducer should see it: a blank id is absent, so the name fallback applies.
+const presentId = (id: string | undefined): string | undefined => (id !== undefined && id.trim() !== '' ? id : undefined)
+
+// Ends the activity a finished call started, by its tool_use_id so a parallel batch keeps the calls
+// still running. A subagent's call never started one; it only clears a permission label (its own
+// ask may be the one shown) and leaves a main-loop tool phase alone. The plan tool never showed as
+// Running.
+async function endTool(
+  $: EngineInterface,
+  tool: string,
+  toolUseId: string | undefined,
+  agentId: string | undefined,
+): Promise<void> {
   if (isPlanTool(tool, (await read($, planTool)).name)) return
   if (agentId !== undefined) {
     // Only redraws when a permission label is up, so an ordinary subagent call stays silent.
@@ -287,7 +353,8 @@ async function endTool($: EngineInterface, tool: string, agentId: string | undef
 
     return
   }
-  await applyActivity($, tool === ASK_TOOL ? { type: 'questionClose' } : { type: 'toolEnd' })
+  const id = presentId(toolUseId)
+  await applyActivity($, tool === ASK_TOOL ? { type: 'questionClose' } : { type: 'toolEnd', tool, ...(id !== undefined ? { id } : {}) })
 }
 
 // A call finished: ends its activity, then mirrors a main-loop TaskCreate, TaskUpdate or TodoWrite
@@ -297,23 +364,26 @@ async function endTool($: EngineInterface, tool: string, agentId: string | undef
 async function afterTool(
   $: EngineInterface,
   tool: string,
+  toolUseId: string | undefined,
   input: unknown,
   response: unknown,
   agentId: string | undefined,
 ): Promise<void> {
-  await endTool($, tool, agentId)
+  await endTool($, tool, toolUseId, agentId)
   if (agentId !== undefined) return
   if (tool === 'TaskCreate') {
     const created = taskCreateFrom(input, response)
-    if (created === null) return debugLog($, 'todo-list: TaskCreate response not recognised, not mirrored')
+    if (created === null) return dropUnrecognised($, 'TaskCreate')
     await mirror($, 'TaskCreate', (cur, now) => ingestTaskCreate(cur, created, now))
   } else if (tool === 'TaskUpdate') {
+    // The tool said the update failed: nothing to mirror and nothing to report.
+    if (taskUpdateFailed(response)) return debugLog($, 'todo-list: TaskUpdate reported failure, not mirrored')
     const updated = taskUpdateFrom(input, response)
-    if (updated === null) return debugLog($, 'todo-list: TaskUpdate response not recognised, not mirrored')
+    if (updated === null) return dropUnrecognised($, 'TaskUpdate')
     await mirror($, 'TaskUpdate', (cur, now) => ingestTaskUpdate(cur, updated, now))
   } else if (tool === 'TodoWrite') {
     const todos = todosFrom(input, response)
-    if (todos === null) return debugLog($, 'todo-list: TodoWrite response not recognised, not mirrored')
+    if (todos === null) return dropUnrecognised($, 'TodoWrite')
     await mirror($, 'TodoWrite', (cur, now) => ingestTodoWrite(cur, todos, now))
   }
 }
@@ -398,6 +468,17 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // A denied permission never reaches PostToolUse, so this ends the call's activity and clears the
+  // permission label that would otherwise stay up for the rest of the turn.
+  on('classic.PermissionDenied', async ($, e, next) => {
+    await guard($, 'PermissionDenied', undefined, async () => {
+      await endTool($, e.tool_name, e.tool_use_id, e.agent_id)
+      if (e.agent_id === undefined) await applyActivity($, { type: 'permissionEnd' })
+    })
+
+    return next(e)
+  })
+
   on('classic.SubagentStart', async ($, e, next) => {
     await guard($, 'SubagentStart', undefined, () => applyActivity($, { type: 'subagentStart', id: e.agent_id }))
 
@@ -452,6 +533,7 @@ export const register: Register = (on, options) => {
   on('session.end', async ($, e, next) => {
     if (e.reason === 'clear') {
       await guard($, 'session.end', undefined, () => applyActivity($, { type: 'sessionClear' }))
+      await guard($, 'session.end', undefined, () => update($, dropShown, () => false))
     }
 
     return next(e)
@@ -482,7 +564,10 @@ export const register: Register = (on, options) => {
       return { deny: 'Blocked: there is no plan for this task yet. Call mcp__todo-list__plan with {"op":"set","title":"<task>","nodes":[{"title":"<step>"}]} first, then retry the tool. If the tool is not loaded, load it first with ToolSearch (query "select:mcp__todo-list__plan").' }
     }
     // A denied call never shows as Running.
-    const open: ActivityEvent = kind === 'question' ? { type: 'questionOpen' } : { type: 'toolStart', tool: e.tool }
+    // AskUserQuestion only opens the question phase; it has no running entry to end.
+    const id = presentId(e.tool_use_id)
+    const open: ActivityEvent =
+      kind === 'question' ? { type: 'questionOpen' } : { type: 'toolStart', tool: e.tool, ...(id !== undefined ? { id } : {}) }
     await guard($, 'tool start', undefined, () => applyActivity($, open))
 
     return next(e)
@@ -502,14 +587,14 @@ export const register: Register = (on, options) => {
   // runs after the tool succeeded and changes nothing in what the model sees.
   on('classic.PostToolUse', async ($, e, next) => {
     await guard($, 'PostToolUse', undefined, () =>
-      afterTool($, e.tool_name, e.tool_input, e.tool_response, e.agent_id),
+      afterTool($, e.tool_name, e.tool_use_id, e.tool_input, e.tool_response, e.agent_id),
     )
 
     return next(e)
   })
 
   on('classic.PostToolUseFailure', async ($, e, next) => {
-    await guard($, 'PostToolUseFailure', undefined, () => endTool($, e.tool_name, e.agent_id))
+    await guard($, 'PostToolUseFailure', undefined, () => endTool($, e.tool_name, e.tool_use_id, e.agent_id))
 
     return next(e)
   })

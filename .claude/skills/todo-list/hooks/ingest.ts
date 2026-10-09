@@ -16,6 +16,17 @@ export type TaskUpdateInput = {
 }
 export type TodoInput = { content: string; status: 'pending' | 'in_progress' | 'completed'; activeForm?: string }
 
+// A call the mirror recognised but has nothing to apply: not an error, so no failure log or toast.
+// Reasons are fixed strings with no user content in them.
+export type Ignored = { ignored: string }
+export type IngestResult = PlanResult | Ignored
+export const IGNORED_UNKNOWN_TASK = 'task id not in the plan'
+
+// Why a mirror was dropped, as shown in the once-per-session toast. Fixed strings: they must never
+// carry the subject, a title or the ingest error text, which can hold user content.
+export const DROPPED_NOT_MIRRORED = 'a task was not mirrored to the plan'
+export const DROPPED_UNRECOGNISED = 'a task response was not recognised, so it was not mirrored'
+
 type NewLeaf = { title: string; activeForm?: string; status: PlanStatus; externalId?: string }
 
 const withSource = (plan: Plan, source: PlanSource, leaves: readonly NewLeaf[], now: number, kept: PlanNode[]): PlanResult => {
@@ -52,9 +63,9 @@ export const ingestTaskCreate = (plan: Plan, input: TaskCreateInput, now: number
   return withSource(plan, 'task', [{ title: input.subject, activeForm: input.activeForm, status: 'pending', externalId: externalId.text }], now, plan.nodes)
 }
 
-export const ingestTaskUpdate = (plan: Plan, input: TaskUpdateInput, now: number): PlanResult => {
+export const ingestTaskUpdate = (plan: Plan, input: TaskUpdateInput, now: number): IngestResult => {
   const node = findTask(plan, clean(String(input.taskId)))
-  if (node === undefined) return { plan }
+  if (node === undefined) return { ignored: IGNORED_UNKNOWN_TASK }
   if (input.status === 'deleted') return removeNode(plan, node.id, now)
   const next: PlanNode = { ...node, updatedAt: now }
   if (input.subject !== undefined) {

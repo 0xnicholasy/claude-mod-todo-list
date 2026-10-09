@@ -2,6 +2,7 @@ import type { CommandRunInput, EngineInterface, On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 import { denyText } from './gate'
+import { DROPPED_NOT_MIRRORED, DROPPED_UNRECOGNISED } from './ingest'
 import { DEFAULT_ACCENT } from './tree'
 
 // The plan tool is called by its literal name: $.tool.register is not available under
@@ -21,11 +22,22 @@ const SET = {
 }
 const SHOW = { tool: TOOL, op: 'show' }
 
+// The tool_use_id the harness gave each main-loop call, oldest first. The end of a call is matched to
+// its start by this id, so a test ends a call with the id the harness assigned (see `finish`).
+let seenIds: string[] = []
+const lastId = (): string => seenIds.at(-1) ?? ''
+
 // The world beneath the mod: a clock, a log sink and a status recorder.
 const setup = (on: On): { logs: string[]; statuses: Array<string | undefined> } => {
   const logs: string[] = []
   const statuses: Array<string | undefined> = []
+  seenIds = []
   mock.clock(on)
+  on('tool.call', async (_$, e, next) => {
+    seenIds.push(e.tool_use_id)
+
+    return next(e)
+  })
   on('ui.log', async (_$, e, next) => {
     logs.push(e.text)
 
@@ -74,7 +86,7 @@ test('a subagent plan call changes nothing', async ($, on) => {
 })
 
 test('prompt.compose adds the plan section once, and only when the tool is offered', async ($, on) => {
-  setup(on)
+  const { logs, statuses } = setup(on)
   const base = { model: 'm', promptModel: 'm', surfaces: [], outputStyle: null, traits: [] }
   on('prompt.compose', async () => ({ sections: [] }))
   const withTool = await $.prompt.compose({ ...base, tools: ['Read', TOOL] })
@@ -278,12 +290,13 @@ const finish = (
   input: Record<string, unknown>,
   response: unknown,
   agentId?: string,
+  toolUseId: string = lastId(),
 ): ReturnType<Engine['classic']['PostToolUse']> =>
   $.classic.PostToolUse({
     tool_name: name,
     tool_input: input,
     tool_response: response,
-    tool_use_id: 'tu1',
+    tool_use_id: toolUseId,
     ...(agentId !== undefined ? { agent_id: agentId } : {}),
   })
 
@@ -317,7 +330,7 @@ test('failed, subagent and unrecognised task calls change nothing', async ($, on
   stubTasks(on)
   await $.tool.call(CREATE)
   // A failed call raises PostToolUseFailure: the Running state ends and nothing is mirrored.
-  await $.classic.PostToolUseFailure({ tool_name: 'TaskCreate', tool_input: { subject: 'x' }, tool_use_id: 'tu1', error: 'boom' })
+  await $.classic.PostToolUseFailure({ tool_name: 'TaskCreate', tool_input: { subject: 'x' }, tool_use_id: lastId(), error: 'boom' })
   await finish($, 'TaskCreate', { subject: 'Write docs' }, CREATED, 'sub-1')
   await finish($, 'TaskCreate', { subject: 'Write docs' }, { task: {} })
   expect(statuses.filter(s => s?.includes('Plan'))).toEqual([])
@@ -410,7 +423,68 @@ test('a tool that fails still ends the running state', async ($, on) => {
   await $.turn.start({ text: 'go', turnId: 't1' })
   await $.tool.call(BASH)
   expect(statuses.at(-1)).toBe('Running Bash')
-  await $.classic.PostToolUseFailure({ tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: 'tu1', error: 'boom' })
+  await $.classic.PostToolUseFailure({ tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: lastId(), error: 'boom' })
+  expect(statuses.at(-1)).toBe('Working')
+})
+
+test('a parallel batch keeps Running until the last call ends, and an unknown id changes nothing', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  on('classic.PostToolUse', async () => ({}))
+  on('classic.PostToolUseFailure', async () => ({}))
+  on('tool.call', { tool: 'Bash' }, async () => ({ result: 'ok' }))
+  on('tool.call', { tool: 'Read' }, async () => ({ result: 'ok' }))
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.tool.call(BASH)
+  await $.tool.call({ tool: 'Read', file_path: '/x' })
+  const [bashId, readId] = seenIds
+  expect(bashId).toBeTruthy()
+  expect(readId).toBeTruthy()
+  expect(bashId).not.toBe(readId)
+  expect(statuses.at(-1)).toBe('Running Read')
+  // The first call ends; the second is still running.
+  await finish($, 'Bash', { command: 'ls' }, 'ok', undefined, bashId)
+  expect(statuses.at(-1)).toBe('Running Read')
+  // A failure for an id that never started leaves the status alone.
+  await $.classic.PostToolUseFailure({ tool_name: 'Read', tool_input: {}, tool_use_id: 'toolu_unknown', error: 'boom' })
+  expect(statuses.at(-1)).toBe('Running Read')
+  await finish($, 'Read', { file_path: '/x' }, 'ok', undefined, readId)
+  expect(statuses.at(-1)).toBe('Working')
+})
+
+test('a parallel batch of the same tool keeps Running by id, so only id wiring at toolStart passes', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  on('classic.PostToolUse', async () => ({}))
+  on('classic.PostToolUseFailure', async () => ({}))
+  stubBash(on)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.tool.call(BASH)
+  await $.tool.call(BASH)
+  const [firstId, secondId] = seenIds
+  expect(firstId).toBeTruthy()
+  expect(secondId).toBeTruthy()
+  expect(firstId).not.toBe(secondId)
+  await finish($, 'Bash', { command: 'ls' }, 'ok', undefined, firstId)
+  expect(statuses.at(-1)).toBe('Running Bash')
+  // A failure for an id that never started must not end a Bash by its name.
+  await $.classic.PostToolUseFailure({ tool_name: 'Bash', tool_input: {}, tool_use_id: 'toolu_unknown', error: 'boom' })
+  expect(statuses.at(-1)).toBe('Running Bash')
+  await finish($, 'Bash', { command: 'ls' }, 'ok', undefined, secondId)
+  expect(statuses.at(-1)).toBe('Working')
+})
+
+test('a question closing during a running call falls back to that call, not to AskUserQuestion', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  on('classic.PostToolUse', async () => ({}))
+  on('tool.call', { tool: 'Bash' }, async () => ({ result: 'ok' }))
+  on('tool.call', { tool: 'AskUserQuestion' }, async () => ({ result: 'answered' }))
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.tool.call(BASH)
+  const bashId = lastId()
+  await $.tool.call({ tool: 'AskUserQuestion', questions: [] })
+  expect(statuses.at(-1)).toBe('Waiting for your answer')
+  await finish($, 'AskUserQuestion', { questions: [] }, 'answered')
+  expect(statuses.at(-1)).toBe('Running Bash')
+  await finish($, 'Bash', { command: 'ls' }, 'ok', undefined, bashId)
   expect(statuses.at(-1)).toBe('Working')
 })
 
@@ -429,6 +503,35 @@ test('PermissionRequest alone shows Waiting for permission, repeating it is harm
   expect(statuses.length).toBe(before + 1)
   await finish($, 'Bash', { command: 'ls' }, 'ok')
   expect(statuses.at(-1)).toBe('Working')
+})
+
+test('PermissionDenied clears the permission label when no PostToolUse follows', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  on('classic.PermissionRequest', async () => ({}))
+  on('classic.PermissionDenied', async () => ({}))
+  stubBash(on)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.tool.call(BASH)
+  const bashId = lastId()
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
+  expect(statuses.at(-1)).toBe('Waiting for permission: Bash')
+  await $.classic.PermissionDenied({ tool_name: 'Bash', tool_input: {}, tool_use_id: bashId, reason: 'no' })
+  expect(statuses.at(-1)).toBe('Working')
+})
+
+test('PermissionDenied for one of two parallel calls keeps the other Running', async ($, on) => {
+  const { statuses } = activitySetup(on)
+  on('classic.PermissionRequest', async () => ({}))
+  on('classic.PermissionDenied', async () => ({}))
+  stubBash(on)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.tool.call(BASH)
+  await $.tool.call(BASH)
+  const firstId = seenIds[0] ?? ''
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
+  expect(statuses.at(-1)).toBe('Waiting for permission: Bash')
+  await $.classic.PermissionDenied({ tool_name: 'Bash', tool_input: {}, tool_use_id: firstId, reason: 'no' })
+  expect(statuses.at(-1)).toBe('Running Bash')
 })
 
 test('AskUserQuestion shows Waiting for your answer until PostToolUse', async ($, on) => {
@@ -611,7 +714,12 @@ test('Notification is logged by type only, and the call result is unchanged', as
 // `claude plugin test` registration does not run, so each test first sends a prompt.compose that
 // lists the plan tool, which stores the name and marks it offered. Edit and Bash are stubbed
 // beneath the mod, and toasts are recorded.
-const gateSetup = async ($: Engine, on: On, corrupt = { task: false, toast: false }): Promise<{ toasts: string[] }> => {
+type Corrupt = { task: boolean; toast: boolean; plan?: boolean; hold?: number; land?: { armed: boolean; reads: number } }
+const gateSetup = async (
+  $: Engine,
+  on: On,
+  corrupt: Corrupt = { task: false, toast: false },
+): Promise<{ toasts: string[]; logs: string[]; statuses: Array<string | undefined> }> => {
   const toasts: string[] = []
   on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
   on('prompt.compose', async () => ({ sections: [] }))
@@ -622,14 +730,36 @@ const gateSetup = async ($: Engine, on: On, corrupt = { task: false, toast: fals
     return next(e)
   })
   // The seam for a forced throw: once `corrupt.task` is set, the task atom reads back malformed.
-  on('state.get', async (_$, e, next) => (corrupt.task && e.key === 'task' ? { value: { value: null, version: 1 } } : next(e)))
+  on('state.get', async (_$, e, next) => {
+    // One-shot: update() re-reads a malformed value several times before it throws, so a seam that
+    // cleared on the first read would let the retry succeed. It stays malformed until the plan guard
+    // has logged its failure, and clears itself at the next read.
+    if (corrupt.plan && logs.some(line => line.startsWith('todo-list: plan tool threw'))) corrupt.plan = false
+    if (e.key === 'dropShown' && corrupt.hold !== undefined && corrupt.hold > 0) {
+      corrupt.hold -= 1
+      for (let tick = 0; tick < 200; tick++) await Promise.resolve()
+    }
+    if (corrupt.plan && e.key === 'plan') return { value: { value: null, version: 1 } }
+    // The second read of the task atom while armed is the update's own: the plan has landed since the snapshot.
+    if (corrupt.land?.armed && e.key === 'task') {
+      corrupt.land.reads += 1
+      if (corrupt.land.reads === 2) {
+        corrupt.land.armed = false
+        const res = await next(e)
+
+        return res.value === undefined ? res : { value: { ...res.value, value: { open: true, planned: true, denies: 0 } } }
+      }
+    }
+
+    return corrupt.task && e.key === 'task' ? { value: { value: null, version: 1 } } : next(e)
+  })
   on('tool.call', { tool: 'Edit' }, async () => ({ result: 'edited' }))
   on('tool.call', { tool: 'Read' }, async () => ({ result: 'read' }))
-  setup(on)
+  const { logs, statuses } = setup(on)
   const base = { model: 'm', promptModel: 'm', surfaces: [], outputStyle: null, traits: [] }
   await $.prompt.compose({ ...base, tools: ['Read', 'Edit', TOOL] })
 
-  return { toasts }
+  return { toasts, logs, statuses }
 }
 const EDIT = { tool: 'Edit', file_path: '/x', old_string: 'a', new_string: 'b' } as const
 const isDenied = (out: { deny?: string }): boolean => out.deny !== undefined
@@ -688,6 +818,17 @@ test('gate: a throw in the gate path allows the call', async ($, on) => {
   expect(out.result).toBe('edited')
 })
 
+test('gate: a plan tool failure answers with the error text and leaves no plan', async ($, on) => {
+  const corrupt: Corrupt = { task: false, toast: false }
+  await gateSetup($, on, corrupt)
+  await $.turn.start({ text: 'edit a file', turnId: 't1' })
+  // The plan atom reads back malformed, so the plan update throws and the guard answers.
+  corrupt.plan = true
+  expect((await $.tool.call(SET)).result).toBe('Error: the plan tool failed. Try again.')
+  expect(String((await $.tool.call(SHOW)).result)).toContain('No plan yet')
+  expect(isDenied(await $.tool.call(EDIT))).toBe(true)
+})
+
 test('gate: a subagent Edit is allowed', async ($, on) => {
   const { toasts } = await gateSetup($, on)
   await $.turn.start({ text: 'edit a file', turnId: 't1' })
@@ -715,6 +856,16 @@ test('gate: the 4th blocked call in a turn is allowed, and the toast shows once 
   expect(toasts).toHaveLength(3)
 })
 
+test('gate: four concurrent blocked calls give exactly three denies, one deny toast and one pause toast', async ($, on) => {
+  const { toasts } = await gateSetup($, on)
+  await $.turn.start({ text: 'edit a file', turnId: 't1' })
+  const outs = await Promise.all([$.tool.call(EDIT), $.tool.call(EDIT), $.tool.call(EDIT), $.tool.call(EDIT)])
+  expect(outs.filter(isDenied)).toHaveLength(3)
+  expect(outs.filter(out => out.result === 'edited')).toHaveLength(1)
+  expect(toasts.filter(text => text.startsWith('Blocked Edit'))).toHaveLength(1)
+  expect(toasts.filter(text => text === 'Plan enforcement paused for this turn')).toHaveLength(1)
+})
+
 test('gate: a throwing toast does not change the deny', async ($, on) => {
   const corrupt = { task: false, toast: true }
   await gateSetup($, on, corrupt)
@@ -722,6 +873,183 @@ test('gate: a throwing toast does not change the deny', async ($, on) => {
   const denied = await $.tool.call(EDIT)
   expect(denied.deny).toContain(TOOL)
   expect(denied.result).toBeUndefined()
+})
+
+test('gate: a plan landing between the snapshot and the update allows the call, with no deny and no toast', async ($, on) => {
+  const corrupt: Corrupt = { task: false, toast: false, land: { armed: false, reads: 0 } }
+  const { toasts } = await gateSetup($, on, corrupt)
+  await $.turn.start({ text: 'edit a file', turnId: 't1' })
+  // The gate reads the task atom twice: the snapshot, then the update's own read. The plan lands in between.
+  if (corrupt.land !== undefined) corrupt.land.armed = true
+  const raced = await $.tool.call(EDIT)
+  expect(raced.deny).toBeUndefined()
+  expect(raced.result).toBe('edited')
+  expect(toasts).toEqual([])
+  // The raced call counted no deny, and the plan stays in force for the next call.
+  expect((await $.tool.call(EDIT)).result).toBe('edited')
+  expect(toasts).toEqual([])
+})
+
+// A mirror whose first compare-and-set misses (T02). `update` retries a write that missed its
+// ifVersion, running the reducer again on the plan that beat it. The seam hooks the first write to
+// the plan atom after it is armed: it writes `swap(previous)` in its place and answers isSet false,
+// as if another PostToolUse had written first. The start plan holds `count` skipped leaves, so
+// the plan is finished and a new turn starts unplanned.
+const missSetup = async ($: Engine, on: On, count: number, swapTo: number): Promise<{ statuses: Array<string | undefined>; logs: string[]; toasts: string[] }> => {
+  const armed = { value: false }
+  stubTasks(on)
+  on('state.set', async (_$, e, next) => {
+    if (e.key !== 'plan' || !armed.value) return next(e)
+    armed.value = false
+    const prev = e.previous
+    if (prev === undefined) return next(e)
+    // Fewer nodes: a prefix of the stored plan. More: the stored plan plus copies of its first node.
+    const nodes = prev.nodes.slice(0, swapTo)
+    while (nodes.length < swapTo) nodes.push({ ...prev.nodes[0]!, id: `x${nodes.length}`, title: `filler ${nodes.length}` })
+    const { ifVersion: _dropped, ...unconditional } = e
+    const written = await next({ ...unconditional, value: { ...prev, nodes } })
+    if (written.value === undefined) return written
+
+    return { value: { isSet: false, version: written.value.version } }
+  })
+  // gateSetup sends the first event through `$`, so every hook above is registered before it.
+  const world = await gateSetup($, on)
+  const titles = Array.from({ length: count }, (_, i) => ({ title: `Step ${i + 1}` }))
+  await $.tool.call({ tool: TOOL, op: 'set', title: 'Big plan', nodes: titles })
+  const done = titles.map((_, i) => ({ id: String(i + 1), status: 'skipped' }))
+  await $.tool.call({ tool: TOOL, op: 'update', updates: done })
+  await $.turn.start({ text: 'edit a file', turnId: 't2' })
+  expect(isDenied(await $.tool.call(EDIT))).toBe(true)
+  world.logs.length = 0
+  world.statuses.length = 0
+  armed.value = true
+
+  return world
+}
+
+test('mirror: a TaskCreate that errors on the first attempt and fits on the retry is mirrored', async ($, on) => {
+  const { statuses, logs } = await missSetup($, on, 60, 30)
+  await $.tool.call(CREATE)
+  await finish($, 'TaskCreate', { subject: 'Write docs', activeForm: 'Writing docs' }, CREATED)
+  expect(String((await $.tool.call(SHOW)).result)).toContain('Write docs')
+  expect(statuses.at(-1)).toContain('Writing docs')
+  expect(logs.filter(line => line.includes('not mirrored'))).toEqual([])
+  const out = await $.tool.call(EDIT)
+  expect(out.deny).toBeUndefined()
+  expect(out.result).toBe('edited')
+})
+
+test('mirror: a TaskCreate that fits on the first attempt and errors on the retry stays unplanned', async ($, on) => {
+  const { logs } = await missSetup($, on, 59, 60)
+  await $.tool.call(CREATE)
+  await finish($, 'TaskCreate', { subject: 'Write docs', activeForm: 'Writing docs' }, CREATED)
+  expect(String((await $.tool.call(SHOW)).result)).not.toContain('Write docs')
+  expect(logs.filter(line => line.includes('not mirrored'))).toHaveLength(1)
+  expect(isDenied(await $.tool.call(EDIT))).toBe(true)
+})
+
+test('mirror: a TaskUpdate for an unknown id is ignored, so the gate stays closed and no toast fires', async ($, on) => {
+  stubTasks(on)
+  const { toasts, logs } = await gateSetup($, on)
+  await $.turn.start({ text: 'edit a file', turnId: 't1' })
+  await finish($, 'TaskUpdate', { taskId: '99', status: 'completed' }, DONE)
+  expect(logs.filter(line => line.includes('TaskUpdate ignored'))).toHaveLength(1)
+  expect(logs.filter(line => line.includes('not mirrored'))).toEqual([])
+  expect(isDenied(await $.tool.call(EDIT))).toBe(true)
+  expect(toasts).toEqual(['Blocked Edit: no plan yet. /todo off turns this off.'])
+})
+
+// The dropped-mirror toast (T06): one toast per session, a fixed reason, never the task text.
+const dropToast = (reason: string): string => `Plan not updated: ${reason}`
+const nodeTitles = Array.from({ length: 60 }, (_, i) => ({ title: `Step ${i + 1}` }))
+const fullPlan = async ($: Engine): Promise<string> => {
+  await $.tool.call({ tool: TOOL, op: 'set', title: 'Big plan', nodes: nodeTitles })
+
+  return String((await $.tool.call(SHOW)).result)
+}
+const clearSession = (
+  $: Engine,
+  reason: 'clear' | 'other',
+): ReturnType<Engine['session']['end']> =>
+  $.session.end({ reason, sessionId: 's1', resume: { id: 's1' } } as Parameters<typeof $.session.end>[0])
+
+test('drop toast: a 60-node plan plus TaskCreate shows one toast and leaves the plan unchanged', async ($, on) => {
+  stubTasks(on)
+  const { toasts } = await gateSetup($, on)
+  const before = await fullPlan($)
+  await finish($, 'TaskCreate', { subject: 'Write docs' }, CREATED)
+  expect(toasts).toEqual([dropToast(DROPPED_NOT_MIRRORED)])
+  expect(String((await $.tool.call(SHOW)).result)).toBe(before)
+})
+
+test('drop toast: the toast text carries no subject or title from the input', async ($, on) => {
+  stubTasks(on)
+  const { toasts } = await gateSetup($, on)
+  await fullPlan($)
+  await finish($, 'TaskCreate', { subject: 'Quarterly-secret-subject' }, { task: { id: '8', subject: 'Quarterly-secret-subject' } })
+  expect(toasts).toHaveLength(1)
+  expect(toasts[0]).not.toContain('Quarterly-secret-subject')
+  expect(toasts[0]).not.toContain('Step 1')
+  expect(toasts[0]).not.toMatch(/\d/)
+})
+
+test('drop toast: two concurrent failures show one toast, even when both read the flag as false', async ($, on) => {
+  stubTasks(on)
+  // `hold` makes the first two reads of the flag wait, so both callers see false before either
+  // writes. Only a compare-and-set claim then lets exactly one of them toast; a read-then-write
+  // would toast twice.
+  const corrupt: Corrupt = { task: false, toast: false, hold: 2 }
+  const { toasts } = await gateSetup($, on, corrupt)
+  await fullPlan($)
+  await Promise.all([
+    finish($, 'TaskCreate', { subject: 'A' }, { task: { id: '8', subject: 'A' } }),
+    finish($, 'TaskCreate', { subject: 'B' }, { task: { id: '9', subject: 'B' } }),
+  ])
+  expect(toasts).toEqual([dropToast(DROPPED_NOT_MIRRORED)])
+})
+
+test('drop toast: a failure that fits on the retry shows no toast', async ($, on) => {
+  const { toasts, logs } = await missSetup($, on, 60, 30)
+  await finish($, 'TaskCreate', { subject: 'Write docs', activeForm: 'Writing docs' }, CREATED)
+  expect(String((await $.tool.call(SHOW)).result)).toContain('Write docs')
+  expect(logs.filter(line => line.includes('not mirrored'))).toEqual([])
+  expect(toasts.filter(text => text.startsWith('Plan not updated'))).toEqual([])
+})
+
+test('drop toast: an unrecognised TaskCreate response shows one toast', async ($, on) => {
+  stubTasks(on)
+  const { toasts, logs } = await gateSetup($, on)
+  await finish($, 'TaskCreate', { subject: 'Write docs' }, { unexpected: true })
+  await finish($, 'TaskCreate', { subject: 'Write docs' }, { unexpected: true })
+  expect(logs.filter(line => line.includes('response not recognised'))).toHaveLength(2)
+  expect(toasts).toEqual([dropToast(DROPPED_UNRECOGNISED)])
+})
+
+test('drop toast: a TaskUpdate the tool reported as failed shows no toast and keeps the slot', async ($, on) => {
+  stubTasks(on)
+  const { toasts, logs } = await gateSetup($, on)
+  await finish($, 'TaskUpdate', { taskId: '5', status: 'completed' }, { success: false, taskId: '5' })
+  expect(logs.filter(line => line.includes('reported failure'))).toHaveLength(1)
+  expect(toasts.filter(text => text.startsWith('Plan not updated'))).toEqual([])
+  await finish($, 'TaskCreate', { subject: 'Write docs' }, { unexpected: true })
+  expect(toasts).toEqual([dropToast(DROPPED_UNRECOGNISED)])
+})
+
+test('drop toast: a session clear re-arms it, any other session end does not', async ($, on) => {
+  stubTasks(on)
+  on('session.end', async (_$, e) => ({ sessionId: e.sessionId }))
+  const { toasts } = await gateSetup($, on)
+  await fullPlan($)
+  const fail = (): ReturnType<typeof finish> => finish($, 'TaskCreate', { subject: 'Write docs' }, CREATED)
+  await fail()
+  expect(toasts).toHaveLength(1)
+  await clearSession($, 'other')
+  await fail()
+  expect(toasts).toHaveLength(1)
+  await clearSession($, 'clear')
+  // The host resets the plan on /clear too; the test engine does not, so the plan is still full.
+  await fail()
+  expect(toasts).toEqual([dropToast(DROPPED_NOT_MIRRORED), dropToast(DROPPED_NOT_MIRRORED)])
 })
 
 // Draws the pane and returns the element tree as JSON, so a test can look for a colour.

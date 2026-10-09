@@ -28,6 +28,9 @@ export const taskCreateFrom = (input: unknown, response: unknown): TaskCreateInp
   return out
 }
 
+// A TaskUpdate the tool itself reported as failed: a known outcome, not an unrecognised shape.
+export const taskUpdateFailed = (response: unknown): boolean => isDict(response) && response.success === false
+
 // Only a call the tool reported as successful (`success: true`) counts.
 export const taskUpdateFrom = (input: unknown, response: unknown): TaskUpdateInput | null => {
   if (!isDict(input) || !isDict(response) || response.success !== true) return null

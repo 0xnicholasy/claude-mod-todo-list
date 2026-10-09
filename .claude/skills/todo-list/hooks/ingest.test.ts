@@ -1,10 +1,12 @@
 import { expect, test } from 'claude-code/testing'
-import { ingestTaskCreate, ingestTaskUpdate, ingestTodoWrite } from './ingest'
+import { DROPPED_NOT_MIRRORED, DROPPED_UNRECOGNISED, IGNORED_UNKNOWN_TASK, ingestTaskCreate, ingestTaskUpdate, ingestTodoWrite } from './ingest'
 import { addNodes, emptyPlan, MAX_NODES, progress, removeNode, setPlan } from './plan'
-import type { Plan, PlanResult } from './plan'
+import type { Plan } from './plan'
+import type { IngestResult } from './ingest'
 
-const ok = (r: PlanResult): Plan => {
+const ok = (r: IngestResult): Plan => {
   if ('error' in r) throw new Error(r.error)
+  if ('ignored' in r) throw new Error(`ignored: ${r.ignored}`)
 
   return r.plan
 }
@@ -44,9 +46,14 @@ test('TaskUpdate patches subject, activeForm and status by externalId', () => {
   expect(progress(done)).toEqual({ done: 1, total: 1 })
 })
 
-test('TaskUpdate with status deleted removes the node, and an unknown id is a no-op', () => {
+test('TaskUpdate with an unknown id is an ignored outcome, not a plan', () => {
+  const out = ingestTaskUpdate(withTask(), { taskId: '9', status: 'completed' }, 2)
+  expect(out).toEqual({ ignored: IGNORED_UNKNOWN_TASK })
+  expect('plan' in out).toBe(false)
+})
+
+test('TaskUpdate with status deleted removes the node', () => {
   const start = withTask()
-  expect(ok(ingestTaskUpdate(start, { taskId: '9', status: 'completed' }, 2))).toEqual(start)
   expect(ok(ingestTaskUpdate(start, { taskId: '7', status: 'deleted' }, 2)).nodes).toEqual([])
 })
 
@@ -88,4 +95,18 @@ test('mirroring respects the node limit', () => {
   let plan = emptyPlan()
   for (let i = 0; i < MAX_NODES; i++) plan = ok(ingestTaskCreate(plan, { id: `${i}`, subject: `t${i}` }, 1))
   expect('error' in ingestTaskCreate(plan, { id: 'x', subject: 'one more' }, 2)).toBe(true)
+})
+
+test('the dropped-mirror reasons are fixed strings with no input text in them', () => {
+  const subject = 'Sentinel-subject-9f3'
+  let plan = emptyPlan()
+  for (let i = 0; i < MAX_NODES; i++) plan = ok(ingestTaskCreate(plan, { id: `${i}`, subject: `t${i}` }, 1))
+  const failed = ingestTaskCreate(plan, { id: 'x', subject }, 2)
+  if (!('error' in failed)) throw new Error('expected the node limit to reject the call')
+  for (const reason of [DROPPED_NOT_MIRRORED, DROPPED_UNRECOGNISED]) {
+    expect(reason).not.toContain(subject)
+    expect(reason).not.toContain(failed.error)
+    expect(reason).not.toMatch(/\d/)
+  }
+  expect(DROPPED_NOT_MIRRORED).not.toBe(DROPPED_UNRECOGNISED)
 })
